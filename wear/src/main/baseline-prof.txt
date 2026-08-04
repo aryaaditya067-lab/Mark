@@ -1,0 +1,97 @@
+# Baseline Profile — Mark (Wear OS)
+#
+# Tells ART which classes and methods to AOT-compile at install time instead of
+# JIT-compiling them on first run. This is the mechanism system apps use to feel
+# instant on the first launch and during the first animation.
+#
+# Placement: wear/src/main/baseline-prof.txt
+# AGP picks this up automatically for release builds when the
+# androidx.profileinstaller dependency is present.
+#
+# Syntax:
+#   H = hot (called often)      S = startup (runs during app start)
+#   P = post-startup            [] before -> method, no prefix -> class
+#
+# Compose, Wear Compose and the AndroidX libraries ship their own baseline
+# profiles, so only OUR classes need listing here.
+
+# ---- Application / startup ----
+HSPLcom/example/mark/WearApplication;-><init>()V
+HSPLcom/example/mark/WearApplication;->onCreate()V
+HSPLcom/example/mark/WearApplication;->getAssistant()Lcom/example/mark/assistant/AssistantController;
+HSPLcom/example/mark/WearApplication;->getTtsManager()Lcom/example/mark/utils/TextToSpeechManager;
+HSPLcom/example/mark/WearApplication;->getSpeechHelper()Lcom/example/mark/utils/SpeechRecognizerHelper;
+Lcom/example/mark/WeatherCache;
+HSPLcom/example/mark/WeatherCache;-><init>(ILjava/lang/String;J)V
+
+HSPLcom/example/mark/presentation/MainActivity;-><init>()V
+HSPLcom/example/mark/presentation/MainActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/example/mark/presentation/MainActivityKt;->**(**)**
+
+# ---- ViewModel + UI state ----
+HSPLcom/example/mark/presentation/WearChatViewModel;-><init>(Landroid/app/Application;)V
+HSPLcom/example/mark/presentation/WearChatViewModel;->startListening()V
+HSPLcom/example/mark/presentation/WearChatViewModel;->updateAmplitude(F)V
+HSPLcom/example/mark/presentation/WearChatViewModel;->send(Ljava/lang/String;)V
+HSPLcom/example/mark/presentation/WearChatViewModel;->startReplyStreaming(Ljava/lang/String;)V
+Lcom/example/mark/presentation/WearUiState;
+HSPLcom/example/mark/presentation/WearUiState;-><init>(ZZZZLjava/lang/String;Ljava/lang/String;)V
+HSPLcom/example/mark/presentation/WearUiState;->copy$default(**)**
+
+# ---- Orb: every frame runs through these ----
+Lcom/example/mark/presentation/OrbState;
+Lcom/example/mark/presentation/StrandSpec;
+Lcom/example/mark/presentation/MoonstoneConfig;
+HSPLcom/example/mark/presentation/WearVoiceRingKt;->WearVoiceRing(**)V
+HSPLcom/example/mark/presentation/WearVoiceRingKt;->VoiceOrbCanvas(**)V
+HSPLcom/example/mark/presentation/WearVoiceRingKt;->OrbTextOverlay(**)V
+HSPLcom/example/mark/presentation/WearVoiceRingKt;->**(**)**
+HSPLcom/example/mark/presentation/StrandSpec;-><init>(**)V
+
+# ---- Screen ----
+HSPLcom/example/mark/presentation/WearChatScreenKt;->WearChatScreen(**)V
+HSPLcom/example/mark/presentation/WearChatScreenKt;->**(**)**
+
+# ---- Speech + TTS (first command path) ----
+HSPLcom/example/mark/utils/SpeechRecognizerHelper;-><init>(Landroid/content/Context;)V
+HSPLcom/example/mark/utils/SpeechRecognizerHelper;->startListening(**)V
+HSPLcom/example/mark/utils/SpeechRecognizerHelper$startListening$1;->onRmsChanged(F)V
+HSPLcom/example/mark/utils/SpeechRecognizerHelper$startListening$1;->onPartialResults(Landroid/os/Bundle;)V
+HSPLcom/example/mark/utils/SpeechRecognizerHelper$startListening$1;->onResults(Landroid/os/Bundle;)V
+HSPLcom/example/mark/utils/TextToSpeechManager;-><init>(Landroid/content/Context;)V
+HSPLcom/example/mark/utils/TextToSpeechManager;->speak(Ljava/lang/String;)V
+HSPLcom/example/mark/utils/TextToSpeechManager;->speakStream(Ljava/lang/String;)V
+
+# ---- Intent engine: runs on every single command ----
+Lcom/example/mark/router/RegexIntentResolver;
+Lcom/example/mark/router/RegexIntentResolver$Rule;
+Lcom/example/mark/router/RegexIntentResolver$Candidate;
+Lcom/example/mark/router/IntentType;
+Lcom/example/mark/router/ReplyMode;
+Lcom/example/mark/router/Intent;
+Lcom/example/mark/router/IntentResult;
+HSPLcom/example/mark/router/RegexIntentResolver;-><init>()V
+HSPLcom/example/mark/router/RegexIntentResolver;->resolve(Ljava/lang/String;)Lcom/example/mark/router/IntentResult;
+HSPLcom/example/mark/router/RegexIntentResolver;->normalize(Ljava/lang/String;)Lkotlin/Pair;
+HSPLcom/example/mark/router/RegexIntentResolver;->levenshtein(Ljava/lang/String;Ljava/lang/String;I)I
+HSPLcom/example/mark/router/RegexIntentResolver;->**(**)**
+HSPLcom/example/mark/router/IntentRouter;->route(Ljava/lang/String;)Lcom/example/mark/router/RoutingDecision;
+
+# ---- Assistant orchestration ----
+Lcom/example/mark/assistant/AssistantController;
+Lcom/example/mark/assistant/AssistantEvent;
+Lcom/example/mark/assistant/ToolResult;
+Lcom/example/mark/assistant/ToolRegistry;
+Lcom/example/mark/assistant/ToolManager;
+HSPLcom/example/mark/assistant/AssistantController;->send(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+HSPLcom/example/mark/assistant/AssistantController;->**(**)**
+HSPLcom/example/mark/assistant/ToolManager;->execute(**)**
+HSPLcom/example/mark/assistant/ToolRegistry;->**(**)**
+HSPLcom/example/mark/assistant/Persona;->**(**)**
+HSPLcom/example/mark/assistant/ResponseTemplates;->**(**)**
+HSPLcom/example/mark/assistant/MarkAssistant;->get(**)Lcom/example/mark/assistant/AssistantController;
+
+# ---- Transport (watch -> phone) ----
+Lcom/example/mark/model/Command;
+Lcom/example/mark/model/CommandResult;
+HSPLcom/example/mark/network/CommandTransport;->**(**)**

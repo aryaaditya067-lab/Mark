@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "541775760070",
+    "project_id": "mark-f35dc",
+    "storage_bucket": "mark-f35dc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:541775760070:android:4b2c7d41e5d683b451a5c7",
+        "android_client_info": {
+          "package_name": "com.example.mark"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "541775760070-lg6hiht49lnh68b8hjqurd6bspk8d2v8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.mark",
+            "certificate_hash": "6342a715750f59e00b477d9af47f43f4ebcc42c5"
+          }
+        },
+        {
+          "client_id": "541775760070-6gei0p5rdi93sjvja380vup59p0fvc34.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBbCkSoJMOdKyfjHXhplGHOcHXM2IL3fYU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "541775760070-6gei0p5rdi93sjvja380vup59p0fvc34.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

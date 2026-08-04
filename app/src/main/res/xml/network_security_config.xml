@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android blocks plain http:// by default since API 28. The Mark laptop agent
+  runs on the home LAN with no certificate, so its traffic is cleartext.
+
+  Rather than switching cleartext on for the whole app, it is allowed only for
+  private address ranges — the laptop agent works, and nothing on the public
+  internet gains an unencrypted path.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Home / office LAN ranges -->
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">10.0.0.0</domain>
+        <domain includeSubdomains="true">172.16.0.0</domain>
+        <domain includeSubdomains="true">localhost</domain>
+
+        <!-- The laptop agent. Change this if the laptop's IP changes. -->
+        <domain includeSubdomains="false">192.168.31.230</domain>
+    </domain-config>
+
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
