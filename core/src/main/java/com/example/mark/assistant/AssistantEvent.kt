@@ -13,6 +13,13 @@ sealed interface AssistantEvent {
     ) : AssistantEvent
     
     /**
+     * A holding line ("One moment, sir.") while tools run, so the user is not
+     * left in silence. Spoken, but not part of the reply: never shown as the
+     * answer and never stored in history.
+     */
+    data class Filler(val content: String) : AssistantEvent
+
+    /**
      * The user ended the conversation ("bas", "bye"). Emitted before [Done];
      * voice surfaces let the goodbye finish speaking, then stop listening.
      */

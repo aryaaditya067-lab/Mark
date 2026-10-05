@@ -150,6 +150,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     is AssistantEvent.EndSession -> { /* typed chat has no session to end */ }
+                    // Spoken only (trailing space completes the sentence for TTS); never shown as the reply.
+                    is AssistantEvent.Filler -> if (settingsRepository.voiceOutputEnabled.first()) tts.speakStream(event.content + " ")
                     is AssistantEvent.Error -> {
                         val msg = event.throwable.message ?: "Something went wrong."
                         _uiState.update { it.copy(isLoading = false, errorMessage = msg) }

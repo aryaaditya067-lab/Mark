@@ -10,7 +10,12 @@ import com.example.mark.network.Property
 import com.example.mark.repository.MemoryStore
 import com.example.mark.router.IntentType
 import com.google.gson.Gson
+import com.example.mark.model.Message
+import com.example.mark.repository.ChatHistoryStore
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody
@@ -237,6 +242,52 @@ class AssistantControllerLlmTest {
         assertEquals(listOf("Calling Rahul."), events.texts())
         assertEquals("98765", dial.calls.single().string("number"))
         assertEquals("offline command must not reach the model", 0, api.requests.size)
+    }
+
+    @Test
+    fun saysOneMomentWhileToolsRun() {
+        val tasks = RecordingTool("get_tasks")
+        val api = FakeLlm(toolCall("c1", "get_tasks", "{}"), text("Two tasks, sir."))
+        val events = controller(api, tasks).ask(question)
+        val fillers = events.filterIsInstance<AssistantEvent.Filler>()
+        assertEquals(1, fillers.size)
+        assertTrue(events.indexOf(fillers.single()) < events.indexOfFirst { it is AssistantEvent.Text })
+        assertEquals("the filler is not part of the reply", listOf("Two tasks, sir."), events.texts())
+    }
+
+    @Test
+    fun noFillerForPlainAnswers() {
+        val events = controller(FakeLlm(text("Hi."))).ask(question)
+        assertTrue(events.none { it is AssistantEvent.Filler })
+    }
+
+    private class SlowHistory : ChatHistoryStore {
+        val gate = CompletableDeferred<Unit>()
+        val stored = java.util.Collections.synchronizedList(mutableListOf<Message>())
+        var reads = 0
+        override suspend fun recent(limit: Int): List<Message> { reads++; return stored.takeLast(limit) }
+        override suspend fun appendAll(messages: List<Message>) { gate.await(); stored += messages }
+        override suspend fun clear() { stored.clear() }
+    }
+
+    @Test
+    fun historyWritesNeverDelayTheReply() = runBlocking {
+        val history = SlowHistory()
+        val api = FakeLlm(text("First."), text("Second."))
+        val mark = AssistantController(
+            toolManager = ToolManager(ToolRegistry(emptyList())), api = api, historyProvider = { history },
+        )
+        // Would hang here if replies awaited the (blocked) store.
+        withTimeout(5_000) { mark.send(question).toList() }
+        withTimeout(5_000) { mark.send("and tell me why sunsets look red") .toList() }
+
+        assertEquals("history is read once, then kept in memory", 1, history.reads)
+        val second = api.requests[1].messages.map { it.content }
+        assertTrue("the second request sees the first exchange", second.containsAll(listOf(question, "First.")))
+
+        history.gate.complete(Unit)
+        withTimeout(5_000) { while (history.stored.size < 4) delay(10) }
+        assertEquals(listOf(question, "First.", "and tell me why sunsets look red", "Second."), history.stored.map { it.content })
     }
 
     @Test

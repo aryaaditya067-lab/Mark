@@ -21,7 +21,7 @@ import kotlinx.coroutines.tasks.await
  */
 class ChatHistoryRepository(
     private val auth: AuthRepository = AuthRepository.instance
-) {
+) : ChatHistoryStore {
 
     private val db = FirebaseFirestore.getInstance()
 
@@ -56,7 +56,7 @@ class ChatHistoryRepository(
      * Used when building a request for the LLM to provide context without downloading
      * the entire history.
      */
-    suspend fun recent(limit: Int): List<Message> {
+    override suspend fun recent(limit: Int): List<Message> {
         val snapshot = collection()
             .orderBy("createdAt", Query.Direction.DESCENDING)
             .limit(limit.toLong())
@@ -76,7 +76,7 @@ class ChatHistoryRepository(
      * error between the tool call and the final reply — must leave no trace, or
      * the model reads the orphaned tool call on the next turn and fires it again.
      */
-    suspend fun appendAll(messages: List<Message>) {
+    override suspend fun appendAll(messages: List<Message>) {
         if (messages.isEmpty()) return
         val collection = collection()
         val batch = db.batch()
@@ -86,7 +86,7 @@ class ChatHistoryRepository(
         batch.commit().await()
     }
 
-    suspend fun clear() {
+    override suspend fun clear() {
         val snapshot = collection().get().await()
         // A Firestore batch holds at most 500 writes; a long history needs several.
         snapshot.documents.chunked(MAX_BATCH_WRITES).forEach { chunk ->

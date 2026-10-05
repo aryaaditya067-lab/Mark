@@ -137,6 +137,8 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
                         tts.speakStream(event.content)
                     }
                     is AssistantEvent.EndSession -> endAfterSpeaking = true
+                    // Spoken only (trailing space completes the sentence for TTS); not part of the reply.
+                    is AssistantEvent.Filler -> tts.speakStream(event.content + " ")
                     is AssistantEvent.Error -> {
                         val msg = event.throwable.message ?: "Something went wrong."
                         _state.update { it.copy(phase = VoicePhase.IDLE, errorMessage = msg) }

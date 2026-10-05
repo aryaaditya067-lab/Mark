@@ -5,6 +5,7 @@ import com.example.mark.model.CommandResult
 import com.example.mark.model.Message
 import com.example.mark.network.*
 import com.example.mark.repository.ChatHistoryRepository
+import com.example.mark.repository.ChatHistoryStore
 import com.example.mark.repository.MemoryFacts
 import com.example.mark.repository.MemoryStore
 import com.example.mark.router.IntentRouter
@@ -17,6 +18,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.withLock
 import java.lang.reflect.Type
 import java.util.UUID
 
@@ -27,7 +29,7 @@ class AssistantController(
     private val toolManager: ToolManager,
     private val router: IntentRouter = IntentRouter(),
     private val api: LlmApiService = RetrofitClient.llmApi,
-    private val historyProvider: () -> ChatHistoryRepository? = { ChatHistoryRepository.instance },
+    private val historyProvider: () -> ChatHistoryStore? = { ChatHistoryRepository.instance },
     private val isWatch: Boolean = false,
     private val transport: CommandTransport? = null,
     private val memory: MemoryStore? = null,
@@ -38,6 +40,23 @@ class AssistantController(
     private val toolCallListType = object : TypeToken<List<ToolCall>>() {}.type
 
     private val watchSessionHistory = mutableListOf<Message>()
+
+    /**
+     * Phone: the recent history, read from the store once and then kept in step
+     * locally. Turns used to await a Firestore read before every LLM call and a
+     * Firestore write before every reply; now neither waits on the network.
+     */
+    private var historyCache: MutableList<Message>? = null
+    private val historyLock = kotlinx.coroutines.sync.Mutex()
+
+    /** Writes go out one batch at a time, in order, off the reply path. */
+    private val historyWrites = kotlinx.coroutines.channels.Channel<List<Message>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+
+    init {
+        if (!isWatch) scope.launch {
+            for (batch in historyWrites) runCatching { historyProvider()?.appendAll(batch) }
+        }
+    }
     private var currentTurn: Job? = null
     private var lastSpokenReply: String? = null
     private var endSessionRequested = false
@@ -82,6 +101,9 @@ class AssistantController(
         private val MARKDOWN_SYMBOLS = Regex("[*#`]")
 
         private const val MEMORY_TIMEOUT_MS = 1500L
+
+        /** History kept in memory on the phone; the LLM window is taken from its tail. */
+        private const val HISTORY_CACHE_SIZE = 4 * Constants.MAX_HISTORY_MESSAGES
 
         // Intents that ALWAYS run on the phone when spoken from the watch.
         private val ALWAYS_REMOTE = setOf(
@@ -412,8 +434,7 @@ class AssistantController(
     private suspend fun handleOnlineStream(userText: String): Flow<AssistantEvent> = flow {
         // Read context BEFORE storing this turn's user message — otherwise the
         // window already contains it and the LLM sees the question twice.
-        val past = if (isWatch) watchSessionHistory.toList()
-        else runCatching { historyProvider()?.recent(Constants.MAX_HISTORY_MESSAGES) }.getOrNull() ?: emptyList()
+        val past = pastMessages()
         val stored = HistoryWindow.select(past, Constants.MAX_HISTORY_MESSAGES)
         // Memory is a nice-to-have for a turn, never a reason to stall it.
         val facts = memory?.let { store ->
@@ -449,6 +470,9 @@ class AssistantController(
                 if (text.isNotBlank()) persist(Message(role = "assistant", content = text))
                 break
             }
+            // Tools plus another model round take a few seconds; say so instead
+            // of going silent (once per turn, and only if nothing was said yet).
+            if (round == 0 && spoken.isBlank()) emit(AssistantEvent.Filler(Persona.thinking()))
 
             val assistantMsg = LlmMessage(role = "assistant", content = text.ifBlank { null }, toolCalls = toolCalls)
             messages.add(assistantMsg)
@@ -530,6 +554,19 @@ class AssistantController(
         return "Bearer ${Constants.MIMO_API_KEY}"
     }
 
+    private suspend fun pastMessages(): List<Message> {
+        if (isWatch) return watchSessionHistory.toList()
+        return historyLock.withLock {
+            historyCache?.toList() ?: run {
+                // Not cached on failure (e.g. not signed in yet), so the next turn retries.
+                val loaded = runCatching { historyProvider()?.recent(HISTORY_CACHE_SIZE) }.getOrNull()
+                    ?: return@withLock emptyList()
+                historyCache = loaded.toMutableList()
+                loaded
+            }
+        }
+    }
+
     private suspend fun persist(vararg messages: Message) = persist(messages.toList())
     private suspend fun persist(messages: List<Message>) {
         if (isWatch) {
@@ -537,7 +574,16 @@ class AssistantController(
             // Only the tail is ever sent to the LLM; a long session must not grow forever.
             val overflow = watchSessionHistory.size - WATCH_HISTORY_CAP
             if (overflow > 0) watchSessionHistory.subList(0, overflow).clear()
-        } else runCatching { historyProvider()?.appendAll(messages) }
+        } else {
+            historyLock.withLock {
+                historyCache?.let { cache ->
+                    cache.addAll(messages)
+                    val overflow = cache.size - HISTORY_CACHE_SIZE
+                    if (overflow > 0) cache.subList(0, overflow).clear()
+                }
+            }
+            historyWrites.trySend(messages)
+        }
     }
     private fun Message.toLlmMessage() = LlmMessage(role = role, content = content, toolCalls = toolCallsJson?.let { gson.fromJson(it, toolCallListType) }, toolCallId = toolCallId, name = name)
 
@@ -548,7 +594,10 @@ class AssistantController(
         lastIntentContext = null
         lastUndoInfo = null
         if (isWatch) watchSessionHistory.clear()
-        else historyProvider()?.clear()
+        else {
+            historyLock.withLock { historyCache = mutableListOf() }
+            historyProvider()?.clear()
+        }
     }
 
     suspend fun executeCommand(command: Command): CommandResult {

@@ -394,6 +394,8 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                         if (currentMode == ReplyMode.SPEAK) { tts.speakStream(event.content); startReplyStreaming(fullReply) }
                     }
                     is com.example.mark.assistant.AssistantEvent.EndSession -> endAfterSpeaking = true
+                    // Spoken only (trailing space completes the sentence for TTS); not part of the reply.
+                    is com.example.mark.assistant.AssistantEvent.Filler -> tts.speakStream(event.content + " ")
                     is com.example.mark.assistant.AssistantEvent.Error -> {
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
                         // Never read raw exception text aloud.
