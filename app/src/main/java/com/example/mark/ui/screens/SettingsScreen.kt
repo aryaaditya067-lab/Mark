@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,6 +36,9 @@ fun SettingsScreen(
     val voiceOutputEnabled by settingsViewModel.voiceOutputEnabled.collectAsState()
     val selectedVoice by settingsViewModel.voiceName.collectAsState()
     val savedPlaces by settingsViewModel.savedPlaces.collectAsState()
+    val userName by settingsViewModel.userName.collectAsState()
+    val facts by settingsViewModel.facts.collectAsState()
+    LaunchedEffect(Unit) { settingsViewModel.refreshFacts() }
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showClearDialog by remember { mutableStateOf(false) }
@@ -117,6 +121,52 @@ fun SettingsScreen(
                     }
                 }
             )
+
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("About you", style = MaterialTheme.typography.titleMedium)
+
+            var nameInput by remember(userName) { mutableStateOf(userName) }
+            OutlinedTextField(
+                value = nameInput,
+                onValueChange = { nameInput = it },
+                label = { Text("What should Mark call you?") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                trailingIcon = {
+                    if (nameInput.trim() != userName) {
+                        IconButton(onClick = { settingsViewModel.setUserName(nameInput) }) {
+                            Icon(Icons.Default.Done, contentDescription = "Save")
+                        }
+                    }
+                }
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Text("What Mark remembers", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Say \"Mark, yaad rakhna ...\" to add, or delete here. Your name and these facts " +
+                    "are sent to the AI service with your questions.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+            )
+            if (facts.isEmpty()) {
+                Text(
+                    "Nothing yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+            facts.forEach { fact ->
+                ListItem(
+                    headlineContent = { Text(fact.text) },
+                    trailingContent = {
+                        IconButton(onClick = { settingsViewModel.forget(fact) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Forget")
+                        }
+                    }
+                )
+            }
 
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))

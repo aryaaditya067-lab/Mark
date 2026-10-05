@@ -129,7 +129,9 @@ fun MainScreen(settingsRepository: SettingsRepository, ttsManager: TextToSpeechM
     // Hoisted here so chat state survives switching bottom-nav tabs
     val chatViewModel: ChatViewModel = viewModel()
     val settingsViewModel: SettingsViewModel = viewModel(
-        factory = SettingsViewModelFactory(settingsRepository, ttsManager)
+        factory = SettingsViewModelFactory(
+            settingsRepository, ttsManager, com.example.mark.assistant.MarkAssistant.memory(context)
+        )
     )
 
     Scaffold(

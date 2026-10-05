@@ -33,6 +33,7 @@ class AssistantController(
     private val isWatch: Boolean = false,
     private val transport: CommandTransport? = null,
     private val memory: MemoryStore? = null,
+    private val situation: SituationProvider? = null,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) {
 
@@ -440,9 +441,10 @@ class AssistantController(
         val facts = memory?.let { store ->
             withTimeoutOrNull(MEMORY_TIMEOUT_MS) { runCatching { store.all() }.getOrNull() }
         }?.let(MemoryFacts::forPrompt).orEmpty()
+        val now = situation?.let { runCatching { it.snapshot() }.getOrNull() }.orEmpty()
         persist(Message(role = "user", content = userText))
         val messages = buildList {
-            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt(isWatch, facts)))
+            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt(isWatch, facts, now)))
             addAll(stored.map { it.toLlmMessage() })
             add(LlmMessage(role = "user", content = userText))
         }.toMutableList()

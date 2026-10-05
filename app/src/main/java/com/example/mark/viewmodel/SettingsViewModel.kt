@@ -2,10 +2,15 @@ package com.example.mark.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.mark.assistant.MarkAssistant
+import com.example.mark.model.MemoryFact
+import com.example.mark.repository.MemoryStore
 import com.example.mark.repository.SettingsRepository
 import com.example.mark.utils.TextToSpeechManager
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -14,8 +19,34 @@ import kotlinx.coroutines.launch
  */
 class SettingsViewModel(
     private val repository: SettingsRepository,
-    val ttsManager: TextToSpeechManager
+    val ttsManager: TextToSpeechManager,
+    private val memory: MemoryStore? = null
 ) : ViewModel() {
+
+    /** What Mark should call the user. */
+    val userName: StateFlow<String> = repository.userName
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    fun setUserName(name: String) = viewModelScope.launch {
+        repository.setUserName(name)
+        MarkAssistant.refreshSituation()
+    }
+
+    private val _facts = MutableStateFlow<List<MemoryFact>>(emptyList())
+
+    /** Everything Mark has been asked to remember, newest first. */
+    val facts: StateFlow<List<MemoryFact>> = _facts.asStateFlow()
+
+    fun refreshFacts() = viewModelScope.launch {
+        val store = memory ?: return@launch
+        _facts.value = runCatching { store.all() }.getOrDefault(emptyList()).sortedByDescending { it.createdAt }
+    }
+
+    fun forget(fact: MemoryFact) = viewModelScope.launch {
+        val store = memory ?: return@launch
+        runCatching { store.remove(setOf(fact.id)) }
+        refreshFacts()
+    }
 
     /**
      * StateFlow representing the user's dark mode preference.

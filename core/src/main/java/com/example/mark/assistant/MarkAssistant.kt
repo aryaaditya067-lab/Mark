@@ -24,6 +24,13 @@ import com.example.mark.tools.WatchStatusTool
 import com.example.mark.tools.WeatherTool
 import com.example.mark.repository.FirestoreMemoryStore
 import com.example.mark.repository.LocalMemoryStore
+import com.example.mark.repository.MemoryStore
+import com.example.mark.repository.SettingsRepository
+import com.example.mark.repository.TaskRepository
+import com.example.mark.utils.DeviceSituation
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import com.example.mark.tools.ForgetFactTool
 import com.example.mark.tools.RememberFactTool
 import com.example.mark.utils.LazyLocationProvider
@@ -38,6 +45,27 @@ import com.example.mark.utils.PlayLocationProvider
 object MarkAssistant {
 
     private var instance: AssistantController? = null
+    @Volatile private var memoryStore: MemoryStore? = null
+    @Volatile private var situationCache: CachedSituation? = null
+
+    private fun isWatch(context: Context) =
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)
+
+    /**
+     * The one memory store of this process, shared by the assistant and the
+     * Settings screen so both see the same facts. The watch never touches
+     * Firestore, so its memory stays on the watch.
+     */
+    fun memory(context: Context): MemoryStore = memoryStore ?: synchronized(this) {
+        memoryStore ?: (
+            if (isWatch(context)) LocalMemoryStore(context.applicationContext) else FirestoreMemoryStore()
+        ).also { memoryStore = it }
+    }
+
+    /** Call after changing something the situation snapshot shows, such as the user's name. */
+    fun refreshSituation() {
+        situationCache?.invalidate()
+    }
 
     /**
      * Gets the shared instance of the assistant, creating it if necessary.
@@ -54,8 +82,16 @@ object MarkAssistant {
         val appContext = context.applicationContext
         val pm = appContext.packageManager
         val isWatch = pm.hasSystemFeature(PackageManager.FEATURE_WATCH)
-        // The watch never touches Firestore, so its memory stays on the watch.
-        val memory = if (isWatch) LocalMemoryStore(appContext) else FirestoreMemoryStore()
+        val memory = memory(appContext)
+        val situation = CachedSituation(
+            DeviceSituation(
+                appContext,
+                isWatch = isWatch,
+                settings = SettingsRepository(appContext),
+                tasks = if (isWatch) null else TaskRepository.instance
+            ),
+            CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        ).also { situationCache = it }
 
         val tools = buildList {
             add(AddTaskTool())
@@ -98,7 +134,8 @@ object MarkAssistant {
             toolManager = ToolManager(ToolRegistry(tools)),
             isWatch = isWatch,
             transport = if (isWatch) CommandTransport(appContext) else null,
-            memory = memory
+            memory = memory,
+            situation = situation
         )
     }
 }

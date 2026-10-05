@@ -41,7 +41,9 @@ object Constants {
             "keep things) or says 'remember' / 'yaad rakhna', save it with remember_fact and acknowledge " +
             "briefly; use forget_fact when they ask you to forget. Use what you know naturally.\n" +
             "If you don't know something and no tool can find it, say so briefly. Never invent facts about the user."
-    const val MAX_HISTORY_MESSAGES = 8
+    // 8 left room for only two or three real exchanges once tool calls and
+    // offline command pairs were counted.
+    const val MAX_HISTORY_MESSAGES = 16
 
     /** Override with MIMO_MODEL in local.properties. */
     val MIMO_MODEL: String = BuildConfig.MIMO_MODEL

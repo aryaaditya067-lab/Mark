@@ -130,6 +130,16 @@ class AssistantControllerLlmTest {
     }
 
     @Test
+    fun situationReachesThePrompt() {
+        val api = FakeLlm(text("Charge it soon, sir."))
+        AssistantController(
+            toolManager = ToolManager(ToolRegistry(emptyList())), api = api, historyProvider = { null },
+            situation = { listOf("Phone battery: 9%.") },
+        ).ask(question)
+        assertTrue(api.requests.single().messages.first().content!!.contains("- Phone battery: 9%."))
+    }
+
+    @Test
     fun slowMemoryDoesNotBlockTheTurn() {
         val memory = object : MemoryStore {
             override suspend fun all(): List<MemoryFact> { kotlinx.coroutines.awaitCancellation() }

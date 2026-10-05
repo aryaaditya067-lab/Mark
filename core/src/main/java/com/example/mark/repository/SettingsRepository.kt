@@ -20,6 +20,7 @@ class SettingsRepository(private val context: Context) {
         val VOICE_OUTPUT = booleanPreferencesKey("voice_output")
         val VOICE_NAME = stringPreferencesKey("tts_voice_name")
         val SAVED_PLACES = stringPreferencesKey("saved_places")
+        val USER_NAME = stringPreferencesKey("user_name")
     }
 
     private val gson = com.google.gson.Gson()
@@ -60,6 +61,14 @@ class SettingsRepository(private val context: Context) {
      */
     val voiceOutputEnabled: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.VOICE_OUTPUT] ?: false }
+
+    /** What Mark should call the user; blank when not set. */
+    val userName: Flow<String> =
+        context.dataStore.data.map { it[Keys.USER_NAME] ?: "" }
+
+    suspend fun setUserName(name: String) {
+        context.dataStore.edit { it[Keys.USER_NAME] = name.trim() }
+    }
 
     /**
      * Flow that emits the selected TTS voice name.

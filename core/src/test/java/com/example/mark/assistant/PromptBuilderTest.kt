@@ -28,4 +28,12 @@ class PromptBuilderTest {
         assertTrue(prompt.contains("Monday, 5 October 2026, 07:30"))
         assertTrue(prompt.contains("no markdown"))
     }
+
+    @Test
+    fun situationBlockAppearsOnlyWhenGiven() {
+        val without = PromptBuilder.systemPrompt(now = monday)
+        assertFalse(without.contains("Right now"))
+        val with = PromptBuilder.systemPrompt(situation = listOf("Phone battery: 12%."), now = monday)
+        assertTrue(with.contains("Right now (mention only when relevant):\n- Phone battery: 12%."))
+    }
 }
