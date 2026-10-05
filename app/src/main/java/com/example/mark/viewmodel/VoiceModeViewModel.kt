@@ -88,7 +88,7 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
             android.content.pm.PackageManager.PERMISSION_GRANTED
 
     fun stop() {
-        speech.stopListening()
+        speech.cancel()
         tts.stop()
         _state.value = VoiceModeState(active = false)
     }
@@ -129,24 +129,30 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
             var fullReply = ""
+            // Anything handed to the TTS stream (a filler counts) must be closed
+            // on every ending, or isSpeaking stays up and music stays ducked.
+            var streamed = false
             assistant.send(text).collect { event ->
                 when (event) {
                     is AssistantEvent.Text -> {
                         fullReply += event.content
                         _state.update { it.copy(lastReply = fullReply) }
+                        streamed = true
                         tts.speakStream(event.content)
                     }
                     is AssistantEvent.EndSession -> endAfterSpeaking = true
                     // Spoken only (trailing space completes the sentence for TTS); not part of the reply.
-                    is AssistantEvent.Filler -> tts.speakStream(event.content + " ")
+                    is AssistantEvent.Filler -> { streamed = true; tts.speakStream(event.content + " ") }
                     is AssistantEvent.Error -> {
+                        // Cut any filler or partial answer; the error is shown instead.
+                        if (streamed) { tts.stop(); streamed = false }
                         val msg = event.throwable.message ?: "Something went wrong."
                         _state.update { it.copy(phase = VoicePhase.IDLE, errorMessage = msg) }
                         delay(1500)
                         if (_state.value.active) listen()
                     }
                     is AssistantEvent.Done -> {
-                        if (fullReply.isNotBlank()) {
+                        if (streamed) {
                             tts.finalizeStream()
                             // phase flips in the TTS callback
                         } else if (endAfterSpeaking) {
@@ -188,7 +194,7 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
-        speech.stopListening()
+        speech.cancel()
         tts.stop()
         super.onCleared()
     }

@@ -13,7 +13,6 @@ import com.example.mark.repository.SettingsRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import java.util.UUID
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -134,35 +133,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
             var fullReply = ""
-            val messageId = UUID.randomUUID().toString()
-            
+            // Read once per turn (it was re-read from DataStore for every chunk).
+            val speak = settingsRepository.voiceOutputEnabled.first()
+            // Anything handed to the TTS stream (a filler counts) must be closed
+            // on every ending, or isSpeaking stays up and music stays ducked.
+            var streamed = false
+
             assistant.send(text).collect { event ->
                 when (event) {
                     is AssistantEvent.Text -> {
                         fullReply += event.content
-                        _uiState.update { it.copy(isLoading = false) }
-                        
-                        // Upsert the assistant's message in the repository local flow for UI
-                        _uiState.update { it.copy(streamingReply = fullReply) }
-
-                        if (settingsRepository.voiceOutputEnabled.first()) {
-                            tts.speakStream(event.content)
-                        }
+                        _uiState.update { it.copy(isLoading = false, streamingReply = fullReply) }
+                        if (speak) { streamed = true; tts.speakStream(event.content) }
                     }
                     is AssistantEvent.EndSession -> { /* typed chat has no session to end */ }
                     // Spoken only (trailing space completes the sentence for TTS); never shown as the reply.
-                    is AssistantEvent.Filler -> if (settingsRepository.voiceOutputEnabled.first()) tts.speakStream(event.content + " ")
+                    is AssistantEvent.Filler -> if (speak) { streamed = true; tts.speakStream(event.content + " ") }
                     is AssistantEvent.Error -> {
+                        if (streamed) { tts.stop(); streamed = false }
                         val msg = event.throwable.message ?: "Something went wrong."
                         _uiState.update { it.copy(isLoading = false, errorMessage = msg) }
                     }
                     is AssistantEvent.Done -> {
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
-                        if (fullReply.isNotBlank()) {
-                            if (settingsRepository.voiceOutputEnabled.first()) {
-                                tts.finalizeStream()
-                            }
-                        }
+                        if (streamed) tts.finalizeStream()
                     }
                 }
             }
@@ -181,7 +175,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        speech.stopListening()
+        speech.cancel()
         tts.stop()
         super.onCleared()
     }

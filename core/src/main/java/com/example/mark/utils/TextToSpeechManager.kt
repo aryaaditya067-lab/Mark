@@ -82,10 +82,14 @@ class TextToSpeechManager(context: Context) {
 
     @Volatile private var holdingFocus = false
 
+    /** The engine reported failure; nothing will ever be spoken, so nothing may wait on speech. */
+    @Volatile private var initFailed = false
+
     init {
         tts = TextToSpeech(context.applicationContext) { status ->
             ready = status == TextToSpeech.SUCCESS
             if (!ready) {
+                initFailed = true
                 // Nothing will ever be spoken; never leave callers waiting on it.
                 synchronized(inFlight) { inFlight.clear(); streamOpen = false; buffer = "" }
                 _isSpeaking.value = false
@@ -216,6 +220,7 @@ class TextToSpeechManager(context: Context) {
      * Used for streaming LLM responses.
      */
     fun speakStream(chunk: String) {
+        if (initFailed) return
         if (!ready) {
             // Held until the engine is ready (see init). It used to be dropped,
             // which lost the first reply after a cold start and left voice mode
@@ -251,7 +256,10 @@ class TextToSpeechManager(context: Context) {
      */
     fun finalizeStream() {
         streamOpen = false
-        if (!ready) return // init speaks the held buffer once ready
+        if (!ready) {
+            if (initFailed) { buffer = ""; settle() }
+            return // otherwise init speaks the held buffer once ready
+        }
         val rest = buffer.trim()
         buffer = ""
         if (rest.isNotBlank()) enqueue(rest, TextToSpeech.QUEUE_ADD)

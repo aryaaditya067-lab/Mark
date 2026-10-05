@@ -217,19 +217,55 @@ class AssistantControllerLlmTest {
         val sms = RecordingTool("sms_execute", intent = IntentType.SMS_EXECUTE, confirm = true,
             result = { ToolResult.Success("Message sent.") })
         val api = FakeLlm(
-            toolCall("c1", "sms_execute", "{\"x\":\"hello\"}"),
-            text("Send hello to Rahul?"),
+            toolCall("c1", "sms_execute", "{\"number\":\"98765\",\"body\":\"hello\"}"),
+            text("Okay."),
         )
         val mark = controller(api, sms)
 
-        assertEquals(listOf("Send hello to Rahul?"), mark.ask(question).texts())
+        val texts = mark.ask(question).texts()
+        // The question is built from the real parameters, not the model's wording.
+        assertEquals(listOf("Okay.", " Shall I send \"hello\" to 98765? Say yes or no."), texts)
         assertEquals("tool must not run before the user confirms", 0, sms.calls.size)
         val toolMsg = api.requests[1].messages.single { it.role == "tool" }.content!!
-        assertTrue(toolMsg, toolMsg.contains("confirmation"))
+        assertTrue(toolMsg, toolMsg.contains("yes"))
 
         mark.ask("haan")
-        assertEquals("hello", sms.calls.single().string("x"))
+        assertEquals("hello", sms.calls.single().string("body"))
         assertEquals("the yes is handled offline, not sent to the model", 2, api.requests.size)
+    }
+
+    @Test
+    fun parkedActionDiesIfTheUserMovesOn() {
+        val sms = RecordingTool("sms_execute", intent = IntentType.SMS_EXECUTE, confirm = true)
+        val api = FakeLlm(
+            toolCall("c1", "sms_execute", "{\"number\":\"98765\",\"body\":\"hello\"}"),
+            text("Okay."),
+            text("It's late, sir."),
+        )
+        val mark = controller(api, sms)
+        mark.ask(question)
+        mark.ask("and tell me why sunsets look red")   // the user ignores the question
+        mark.ask("okay")                                // ...then says okay to something else
+        assertEquals("a stale okay must not send the SMS", 0, sms.calls.size)
+    }
+
+    @Test
+    fun onlyOneActionCanWaitForConfirmation() {
+        val sms = RecordingTool("sms_execute", intent = IntentType.SMS_EXECUTE, confirm = true)
+        val call = RecordingTool("call_execute", intent = IntentType.CALL_EXECUTE, confirm = true)
+        val twoCalls = listOf(
+            gson.toJson(mapOf("choices" to listOf(mapOf("delta" to mapOf("tool_calls" to listOf(
+                mapOf("index" to 0, "id" to "a", "function" to mapOf("name" to "sms_execute", "arguments" to "{\"number\":\"1\",\"body\":\"hi\"}")),
+                mapOf("index" to 1, "id" to "b", "function" to mapOf("name" to "call_execute", "arguments" to "{\"number\":\"2\"}"))
+            ))))))
+        )
+        val api = FakeLlm(twoCalls, text("Okay."))
+        val mark = controller(api, sms, call)
+        mark.ask(question)
+        val results = api.requests[1].messages.filter { it.role == "tool" }.map { it.content!! }
+        assertEquals(1, results.count { it.contains("already waiting") })
+        mark.ask("haan")
+        assertEquals("exactly one of the two runs on yes", 1, sms.calls.size + call.calls.size)
     }
 
     @Test

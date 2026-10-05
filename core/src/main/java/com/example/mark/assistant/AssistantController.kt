@@ -68,6 +68,10 @@ class AssistantController(
     )
     private var awaitingConfirmation: AwaitingConfirmation? = null
 
+    /** The action parked by the LLM during the current turn, asked about when the turn ends. */
+    @Volatile private var parkedThisTurn: com.example.mark.router.Intent? = null
+    private val parkLock = Any()
+
     private data class IntentContext(
         val intent: IntentType,
         val params: Map<String, String>,
@@ -178,6 +182,14 @@ class AssistantController(
         stop()
         currentTurn = currentCoroutineContext()[Job]
         endSessionRequested = false
+        // A parked action may only be answered by the very next utterance. If
+        // the user moved on, drop it: otherwise an "okay" to something else a
+        // few seconds later would send the SMS or dial the number.
+        val raw = router.route(userText)
+        if (!(raw is RoutingDecision.Offline && raw.intent.type == IntentType.CONFIRMATION)) {
+            awaitingConfirmation = null
+        }
+        parkedThisTurn = null
 
         try {
             val initialDecision = route(userText)
@@ -510,7 +522,15 @@ class AssistantController(
             // One write per round: a call is never stored without its results.
             persist(roundMessages)
         }
-        if (spoken.isNotBlank()) lastSpokenReply = spoken
+        // The confirmation question comes from the parked action's real
+        // parameters, never from the model's wording.
+        parkedThisTurn?.let { pending ->
+            val question = ConfirmationText.question(pending)
+            emit(AssistantEvent.Text((if (spoken.isNotBlank()) " " else "") + question, ReplyMode.SPEAK))
+            spoken += " $question"
+            persist(Message(role = "assistant", content = question))
+        }
+        if (spoken.isNotBlank()) lastSpokenReply = spoken.trim()
     }
 
     /**
@@ -523,11 +543,22 @@ class AssistantController(
         val name = call.function.name
         val args = call.function.arguments
         toolManager.confirmationFor(name, args)?.let { pending ->
-            awaitingConfirmation = AwaitingConfirmation(pending, System.currentTimeMillis() + 45000)
-            return ToolResult.Partial(
-                "Not done yet: this needs the user's spoken confirmation. " +
-                    "Ask them to confirm in one short sentence that states exactly what will happen.",
+            val parked = synchronized(parkLock) {
+                if (parkedThisTurn != null) false
+                else {
+                    parkedThisTurn = pending
+                    awaitingConfirmation = AwaitingConfirmation(pending, System.currentTimeMillis() + 45000)
+                    true
+                }
+            }
+            return if (parked) ToolResult.Partial(
+                "Not done yet: waiting for the user's spoken yes. The app asks the confirmation question " +
+                    "itself right after your reply, so do not ask it or claim it is done.",
                 reason = "needs_confirmation"
+            ) else ToolResult.Failure(
+                "Not done: another action is already waiting for the user's confirmation. Only one at a " +
+                    "time; mention that this one can be done after.",
+                reason = "one_confirmation_at_a_time"
             )
         }
         val intent = toolManager.intentOf(name)

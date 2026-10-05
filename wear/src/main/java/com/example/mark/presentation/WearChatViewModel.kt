@@ -365,7 +365,9 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     private fun endSession(reason: String) {
         android.util.Log.d("MarkSession", "ended ($reason)")
         app.lastSessionEndTime = System.currentTimeMillis()
-        speech.stopListening()
+        // cancel, not stop: a stop yields a late "Didn't catch that." that
+        // counted as a silence and reopened the mic after the session ended.
+        speech.cancel()
         _uiState.update { it.copy(isListening = false, isPreparing = false, isLoading = false, isSpeaking = false) }
         consecutiveSilences = 0
         consecutiveErrors = 0
@@ -480,7 +482,7 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     override fun onCleared() {
         batteryReceiver?.let { runCatching { app.unregisterReceiver(it) } }
         batteryReceiver = null
-        speech.stopListening()
+        speech.cancel()
         tts.stop()
         super.onCleared()
     }
