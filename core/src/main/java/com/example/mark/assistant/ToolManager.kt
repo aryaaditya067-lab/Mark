@@ -1,5 +1,6 @@
 package com.example.mark.assistant
 
+import com.example.mark.router.Intent
 import com.example.mark.router.IntentType
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -26,13 +27,28 @@ class ToolManager(private val registry: ToolRegistry) {
     suspend fun execute(name: String, arguments: String, rawInput: String? = null): ToolResult {
         val tool = registry[name]
             ?: return ToolResult.Failure("Unknown tool: $name", reason = "not_registered")
-
-        val json = runCatching {
-            gson.fromJson(arguments, JsonObject::class.java)
-        }.getOrNull() ?: JsonObject()
-
-        return run(tool, ToolRequest.fromJson(json, rawInput))
+        return run(tool, ToolRequest.fromJson(parse(arguments), rawInput))
     }
+
+    /** The offline intent behind an LLM tool name, if it has one. */
+    fun intentOf(name: String): IntentType? = registry[name]?.intent
+
+    /** LLM arguments as the flat map the offline path and transport carry. */
+    fun paramsOf(arguments: String): Map<String, String> = ToolRequest.flatten(parse(arguments))
+
+    /**
+     * The intent to hold for a spoken "yes" when an LLM call needs approval,
+     * or null when it may run straight away.
+     */
+    fun confirmationFor(name: String, arguments: String): Intent? {
+        val tool = registry[name] ?: return null
+        val intent = tool.intent ?: return null
+        val params = paramsOf(arguments)
+        return if (tool.needsConfirmation(ToolRequest.of(params))) Intent(intent, params) else null
+    }
+
+    private fun parse(arguments: String): JsonObject =
+        runCatching { gson.fromJson(arguments, JsonObject::class.java) }.getOrNull() ?: JsonObject()
 
     /** Offline path. Params come from the intent resolver's capture groups. */
     suspend fun execute(intent: IntentType, params: Map<String, String>, rawInput: String? = null): ToolResult {

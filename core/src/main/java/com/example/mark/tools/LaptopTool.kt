@@ -41,7 +41,13 @@ class LaptopTool(private val context: Context) : Tool {
             "volume, brightness, screenshot, and status.",
         parameters = Parameters(
             properties = mapOf(
-                "action" to Property("string", "The action to perform (e.g., lock, sleep, vol_up)"),
+                "action" to Property(
+                    "string",
+                    "One of: status, lock, sleep, screen_off, shutdown, restart, logoff, " +
+                        "cancel_shutdown, open, close, switch, media, brightness, " +
+                        "dark_mode, wifi, folder, browser, type, clipboard_get, clipboard_set, " +
+                        "screenshot, screen_record, foreground, gradle"
+                ),
                 "app" to Property("string", "The app to open or close"),
                 "media_action" to Property("string", "Media control action"),
                 "direction" to Property("string", "Direction for volume or brightness"),
@@ -55,7 +61,12 @@ class LaptopTool(private val context: Context) : Tool {
         )
     )
 
+    /** Ending the user's session on the laptop needs a spoken yes. */
+    override fun needsConfirmation(request: ToolRequest): Boolean =
+        request.string("action")?.lowercase() in DESTRUCTIVE_ACTIONS
+
     private companion object {
+        val DESTRUCTIVE_ACTIONS = setOf("shutdown", "restart", "logoff")
         const val PREFS = "laptop_agent"
         const val KEY_HOST = "host"
         const val KEY_TOKEN = "token"

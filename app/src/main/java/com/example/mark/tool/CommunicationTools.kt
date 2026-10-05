@@ -140,6 +140,9 @@ class CallExecuteTool(private val context: Context) : Tool {
             ToolResult.Failure("Failed to dial.", reason = "system_error")
         }
     }
+
+    // The LLM must never dial on its own say-so.
+    override fun needsConfirmation(request: ToolRequest) = true
 }
 
 /**
@@ -268,4 +271,7 @@ class SmsExecuteTool(private val context: Context) : Tool {
             ToolResult.Success("Message sent.")
         }
     }
+
+    // The LLM must never send a message on its own say-so.
+    override fun needsConfirmation(request: ToolRequest) = true
 }

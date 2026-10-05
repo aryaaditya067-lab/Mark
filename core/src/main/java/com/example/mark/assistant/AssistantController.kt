@@ -99,19 +99,49 @@ class AssistantController(
         currentTurn = null
     }
 
+    /**
+     * A bare "haan" / "okay" / "nahi" only means something offline while a
+     * confirmation is pending. Otherwise it is an answer to whatever the LLM
+     * last asked ("Shall I set it for 7?") or just conversation ("okay thanks"),
+     * so it goes to the LLM instead of getting "For what, sir?".
+     */
+    private fun route(text: String): RoutingDecision {
+        val decision = router.route(text)
+        if (decision is RoutingDecision.Offline &&
+            decision.intent.type == IntentType.CONFIRMATION &&
+            !hasPendingConfirmation()
+        ) return RoutingDecision.Online
+        return decision
+    }
+
+    private fun hasPendingConfirmation(): Boolean =
+        awaitingConfirmation?.let { System.currentTimeMillis() <= it.expiresAt } == true
+
+    /** On the watch, these intents act on the phone (the torch, calls, apps...). */
+    private fun runsOnPhone(type: IntentType, params: Map<String, String>): Boolean =
+        isWatch && transport != null && (
+            type in ALWAYS_REMOTE ||
+                (type in REMOTE_UNLESS_WATCH_TARGET && params["target"] != "watch")
+            )
+
+    /** Runs an intent wherever it belongs: here, or on the phone over the Data Layer. */
+    private suspend fun executeAnywhere(type: IntentType, params: Map<String, String>, rawInput: String?): ToolResult =
+        if (runsOnPhone(type, params)) sendRemote(type, params + ("raw_input" to (rawInput ?: "")))
+        else toolManager.execute(type, params, rawInput)
+
     suspend fun send(userText: String): Flow<AssistantEvent> = flow {
         stop()
         currentTurn = currentCoroutineContext()[Job]
 
         try {
-            val initialDecision = router.route(userText)
+            val initialDecision = route(userText)
             val isSms = initialDecision is RoutingDecision.Offline && initialDecision.intent.type == IntentType.SEND_SMS
             val segments = if (isSms) listOf(userText) else splitCompoundCommand(userText)
 
             // A single question for the LLM streams straight through, so the
             // first words are spoken while the rest is still being generated.
             // (Compound commands are still collected and combined below.)
-            if (segments.size == 1 && router.route(segments[0]) is RoutingDecision.Online) {
+            if (segments.size == 1 && route(segments[0]) is RoutingDecision.Online) {
                 var replied = false
                 handleOnlineStream(segments[0]).collect { event ->
                     if (event is AssistantEvent.Text && event.content.isNotBlank()) replied = true
@@ -169,7 +199,7 @@ class AssistantController(
     }
 
     private suspend fun FlowCollector<AssistantEvent>.processTurn(userText: String): Triple<String, ReplyMode, Boolean>? {
-        val decision = router.route(userText)
+        val decision = route(userText)
 
         if (decision is RoutingDecision.Offline) {
             return performIntentExecution(decision.intent, userText)
@@ -243,10 +273,7 @@ class AssistantController(
         }
 
         // Remote Handling
-        val isRemote = isWatch && (
-                intent.type in ALWAYS_REMOTE ||
-                        (intent.type in REMOTE_UNLESS_WATCH_TARGET && intent.params["target"] != "watch")
-                )
+        val isRemote = runsOnPhone(intent.type, intent.params)
 
         if (isRemote && transport != null) {
             val commandId = UUID.randomUUID().toString()
@@ -280,6 +307,16 @@ class AssistantController(
                     return Triple("Phone is taking too long to respond.", ReplyMode.SPEAK, false)
                 }
             } else return Triple("Failed to reach your phone.", ReplyMode.SPEAK, false)
+        } else if (intent.type == IntentType.CALL_CONTACT || intent.type == IntentType.SEND_SMS) {
+            // Spoken on the phone itself. These tools only RESOLVE the contact
+            // ("resolved" + name/number in data); the dial/send step and the
+            // confirmation live here. This used to fall through to handleOffline,
+            // which spoke the literal word "resolved" and never dialled.
+            val res = toolManager.execute(intent.type, intent.params, userText)
+            if (res is ToolResult.Failure) return Triple(res.text, ReplyMode.SPEAK, false)
+            if (intent.type == IntentType.CALL_CONTACT) handleCallResolution(res.data, res.text)
+            else handleSmsResolution(res.data, res.text)
+            return null
         } else if (intent.type in CONVERSATIONAL_INTENTS || toolManager.supports(intent.type)) {
             val (reply, mode) = handleOffline(userText, RoutingDecision.Offline(intent))
             return Triple(reply, mode, true)
@@ -400,22 +437,50 @@ class AssistantController(
             // Calls within one round are independent by construction (the model
             // waits for results before making dependent calls), so run them together.
             val results = coroutineScope {
-                toolCalls.map { call ->
-                    async { call to toolManager.execute(call.function.name, call.function.arguments, userText) }
-                }.awaitAll()
+                toolCalls.map { call -> async { call to runLlmToolCall(call, userText) } }.awaitAll()
             }
             val roundMessages = mutableListOf(
                 Message(role = "assistant", content = assistantMsg.content, toolCallsJson = gson.toJson(toolCalls))
             )
             for ((call, result) in results) {
-                messages.add(LlmMessage(role = "tool", toolCallId = call.id, name = call.function.name, content = result.text))
-                roundMessages.add(Message(role = "tool", content = result.text, toolCallId = call.id, name = call.function.name))
+                val content = toolResultContent(result)
+                messages.add(LlmMessage(role = "tool", toolCallId = call.id, name = call.function.name, content = content))
+                roundMessages.add(Message(role = "tool", content = content, toolCallId = call.id, name = call.function.name))
             }
             // One write per round: a call is never stored without its results.
             persist(roundMessages)
         }
         if (spoken.isNotBlank()) lastSpokenReply = spoken
     }
+
+    /**
+     * One tool call chosen by the LLM. Calls with consequences are not run:
+     * they are parked as a pending confirmation and the model is told to ask,
+     * so the user's spoken "yes" executes them. On the watch, intents that
+     * belong to the phone are sent there, exactly as on the offline path.
+     */
+    private suspend fun runLlmToolCall(call: ToolCall, userText: String): ToolResult {
+        val name = call.function.name
+        val args = call.function.arguments
+        toolManager.confirmationFor(name, args)?.let { pending ->
+            awaitingConfirmation = AwaitingConfirmation(pending, System.currentTimeMillis() + 45000)
+            return ToolResult.Partial(
+                "Not done yet: this needs the user's spoken confirmation. " +
+                    "Ask them to confirm in one short sentence that states exactly what will happen.",
+                reason = "needs_confirmation"
+            )
+        }
+        val intent = toolManager.intentOf(name)
+        if (intent != null) {
+            val params = toolManager.paramsOf(args)
+            if (runsOnPhone(intent, params)) return sendRemote(intent, params + ("raw_input" to userText))
+        }
+        return toolManager.execute(name, args, userText)
+    }
+
+    /** What the LLM reads back: the text, plus structured data (names, numbers) when there is any. */
+    private fun toolResultContent(result: ToolResult): String =
+        if (result.data.isEmpty()) result.text else "${result.text}\n${gson.toJson(result.data)}"
 
     private suspend fun askStream(messages: List<LlmMessage>, offerTools: Boolean): Flow<LlmStreamResponse> = flow {
         val request = LlmRequest(
@@ -491,8 +556,8 @@ class AssistantController(
                 emit(AssistantEvent.Text("Calling $name.", ReplyMode.SPEAK))
                 val executeIntent = com.example.mark.router.Intent(IntentType.CALL_EXECUTE, mapOf("number" to number))
                 delay(2000)
-                val res = sendRemote(executeIntent.type, executeIntent.params)
-                if (res is ToolResult.Success) emit(AssistantEvent.Text(res.text, ReplyMode.SPEAK))
+                val res = executeAnywhere(executeIntent.type, executeIntent.params, null)
+                if (res is ToolResult.Failure) emit(AssistantEvent.Text(res.text, ReplyMode.SPEAK))
             }
             "confirmation_needed" -> {
                 emit(AssistantEvent.Text("Did you mean $name?", ReplyMode.SPEAK))
@@ -534,8 +599,12 @@ class AssistantController(
         val command = Command(id = commandId, type = type, params = params)
         if (transport.sendCommand(command)) {
             val result = withTimeoutOrNull(5000) { transport.results.filter { it.commandId == commandId }.first() }
-            if (result != null) return ToolResult.Success(result.text, result.data)
+            if (result != null) {
+                return if (result.success) ToolResult.Success(result.text, result.data)
+                else ToolResult.Failure(result.text, reason = "remote_failure")
+            }
+            return ToolResult.Failure("Phone is taking too long to respond.", reason = "timeout")
         }
-        return ToolResult.Failure("Phone timeout", "timeout")
+        return ToolResult.Failure("Failed to reach your phone.", reason = "unreachable")
     }
 }

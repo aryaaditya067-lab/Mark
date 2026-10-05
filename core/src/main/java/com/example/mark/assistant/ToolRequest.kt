@@ -27,11 +27,13 @@ class ToolRequest private constructor(
             ToolRequest(params, rawInput)
 
         /** The LLM serialises arguments as a JSON string, never as an object. */
-        fun fromJson(json: JsonObject, rawInput: String? = null): ToolRequest {
-            val flat = json.entrySet().associate { (key, value) ->
+        fun fromJson(json: JsonObject, rawInput: String? = null): ToolRequest =
+            ToolRequest(flatten(json), rawInput)
+
+        /** Same flattening, as the plain map the offline path and transport use. */
+        fun flatten(json: JsonObject): Map<String, String> =
+            json.entrySet().associate { (key, value) ->
                 key to if (value.isJsonPrimitive) value.asString else value.toString()
             }
-            return ToolRequest(flat, rawInput)
-        }
     }
 }
