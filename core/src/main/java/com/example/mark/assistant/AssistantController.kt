@@ -50,12 +50,19 @@ class AssistantController(
     private var historyCache: MutableList<Message>? = null
     private val historyLock = kotlinx.coroutines.sync.Mutex()
 
-    /** Writes go out one batch at a time, in order, off the reply path. */
-    private val historyWrites = kotlinx.coroutines.channels.Channel<List<Message>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+    /**
+     * Writes go out one batch at a time, in order, off the reply path. Each is
+     * tagged with the clear-generation it was made in, so turns queued before a
+     * Clear are dropped instead of re-added afterwards.
+     */
+    private val historyWrites = kotlinx.coroutines.channels.Channel<Pair<Int, List<Message>>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+    @Volatile private var historyGeneration = 0
 
     init {
         if (!isWatch) scope.launch {
-            for (batch in historyWrites) runCatching { historyProvider()?.appendAll(batch) }
+            for ((generation, batch) in historyWrites) {
+                if (generation == historyGeneration) runCatching { historyProvider()?.appendAll(batch) }
+            }
         }
     }
     private var currentTurn: Job? = null
@@ -581,7 +588,10 @@ class AssistantController(
             stream = true
         )
         val responseBody = api.chatCompletionStream(authHeader = llmAuthHeader(), request = request)
-        responseBody.byteStream().bufferedReader().use { reader ->
+        // A blocking readLine() cannot be cancelled; closing the body can. So a
+        // barge-in or stop() ends the read at once instead of after the next chunk.
+        val closeOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion { runCatching { responseBody.close() } }
+        try { responseBody.byteStream().bufferedReader().use { reader ->
             while (true) {
                 val line = reader.readLine() ?: break
                 if (line.startsWith("data:")) {
@@ -593,8 +603,8 @@ class AssistantController(
                     if (chunk != null) emit(chunk)
                 }
             }
-        }
-    }
+        } } finally { closeOnCancel?.dispose() }
+    }.flowOn(Dispatchers.IO) // the ViewModels collect on Main; blocking socket reads must not run there
 
     private fun llmAuthHeader(): String {
         check(Constants.MIMO_API_KEY.isNotBlank()) {
@@ -631,7 +641,7 @@ class AssistantController(
                     if (overflow > 0) cache.subList(0, overflow).clear()
                 }
             }
-            historyWrites.trySend(messages)
+            historyWrites.trySend(historyGeneration to messages)
         }
     }
     private fun Message.toLlmMessage() = LlmMessage(role = role, content = content, toolCalls = toolCallsJson?.let { gson.fromJson(it, toolCallListType) }, toolCallId = toolCallId, name = name)
@@ -645,6 +655,7 @@ class AssistantController(
         if (isWatch) watchSessionHistory.clear()
         else {
             historyLock.withLock { historyCache = mutableListOf() }
+            historyGeneration++
             historyProvider()?.clear()
         }
     }

@@ -19,7 +19,10 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.asResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.buffer
+import okio.source
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -157,6 +160,29 @@ class AssistantControllerLlmTest {
         controller(api, task).ask("yaad rakhna meri car ki chabi drawer mein hai")
         assertEquals(0, task.calls.size)
         assertEquals(1, api.requests.size)
+    }
+
+    @Test
+    fun streamIsReadOffTheCallersThread() {
+        var readOn: String? = null
+        val api = object : LlmApiService {
+            override suspend fun chatCompletion(authHeader: String, request: LlmRequest): LlmResponse = error("unused")
+            override suspend fun chatCompletionStream(authHeader: String, request: LlmRequest): ResponseBody {
+                val sse = text("Hi.").joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n"
+                val bytes = java.io.ByteArrayInputStream(sse.toByteArray())
+                val recording = object : java.io.InputStream() {
+                    override fun read(): Int { readOn = Thread.currentThread().name; return bytes.read() }
+                    override fun read(b: ByteArray, off: Int, len: Int): Int { readOn = Thread.currentThread().name; return bytes.read(b, off, len) }
+                }
+                return recording.source().buffer().asResponseBody("text/event-stream".toMediaType())
+            }
+        }
+        val ui = kotlinx.coroutines.newSingleThreadContext("fake-main")
+        val events = runBlocking(ui) { controller(api).send(question).toList() }
+        assertEquals(listOf("Hi."), events.texts())
+        // Thread names may carry a " @coroutine#N" suffix in debug mode.
+        assertTrue("read on $readOn", readOn != null && !readOn!!.startsWith("fake-main"))
+        ui.close()
     }
 
     @Test

@@ -83,7 +83,10 @@ class ChatHistoryRepository(
         messages.forEach { message ->
             batch.set(collection.document(message.id), message.toFirestore())
         }
-        batch.commit().await()
+        // Not awaited: commit() applies locally and queues durably at once, but
+        // its Task only completes on the server's ack, never while offline, and
+        // waiting held every later turn back in memory.
+        batch.commit().addOnFailureListener { android.util.Log.w("MarkHistory", "history write failed", it) }
     }
 
     override suspend fun clear() {

@@ -39,19 +39,25 @@ class FirestoreMemoryStore(
     }
 
     override suspend fun add(fact: MemoryFact) {
-        val current = all()
-        val kept = MemoryFacts.withAdded(current, fact)
-        val dropped = current.map { it.id }.toSet() - kept.map { it.id }.toSet()
+        all() // make sure the cache is loaded
+        // The cache is updated from its CURRENT value under the lock: tool calls
+        // in one round run in parallel, and computing from a snapshot taken
+        // before the network write lost one of two concurrent changes.
+        val dropped = lock.withLock {
+            val current = cache.orEmpty()
+            val kept = MemoryFacts.withAdded(current, fact)
+            cache = kept
+            current.map { it.id }.toSet() - kept.map { it.id }.toSet()
+        }
         collection().document(fact.id).set(
             mapOf("text" to fact.text, "kind" to fact.kind, "createdAt" to fact.createdAt)
         ).await()
         dropped.forEach { collection().document(it).delete().await() }
-        lock.withLock { cache = kept }
     }
 
     override suspend fun remove(ids: Set<String>) {
-        ids.forEach { collection().document(it).delete().await() }
         lock.withLock { cache = cache?.filterNot { it.id in ids } }
+        ids.forEach { collection().document(it).delete().await() }
     }
 }
 
