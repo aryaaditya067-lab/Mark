@@ -3,7 +3,7 @@
 Mark is a multi-device personal AI assistant designed to bridge the gap
 between your phone, your Wear OS watch, and your Windows laptop. It uses
 a hybrid intelligence model: a local Regex-based routing engine for
-lightning-fast offline commands and the Groq (Llama 3) LLM for complex
+lightning-fast offline commands and the Xiaomi MiMo LLM for complex
 natural language understanding.
 
 ## 1. System Architecture
@@ -68,7 +68,7 @@ provide:
 -   Find nearby places.
 -   Estimate travel distance.
 -   Weather information through OpenWeatherMap.
--   Complex queries handled through Groq Llama 3 when offline routing
+-   Complex queries handled through Xiaomi MiMo when offline routing
     confidence is low.
 
 ------------------------------------------------------------------------
@@ -105,8 +105,8 @@ The routing pipeline consists of:
         candidates before regex evaluation.
 3.  **Token-Coverage Confidence**
     -   Scores how well the user's sentence matches the detected intent.
-    -   Low-confidence requests are automatically forwarded to the Llama
-        3 model.
+    -   Low-confidence requests are automatically forwarded to the MiMo
+        model.
 4.  **Context Follow-ups**
     -   Understands follow-up commands such as "turn it off" by
         remembering the previously executed intent.
@@ -128,11 +128,16 @@ root (already gitignored), or from environment variables of the same
 name. Never put them in source files.
 
 ``` properties
-GROQ_API_KEY=your-groq-key
+MIMO_API_KEY=your-mimo-key
 WEATHER_API_KEY=your-openweathermap-key
+# Optional, defaults to mimo-v2.6-flash (fastest replies for voice)
+MIMO_MODEL=mimo-v2.6-flash
 ```
 
-Without `GROQ_API_KEY` the offline router still works; online requests
+Get a MiMo key from the Xiaomi MiMo API platform. Mark disables MiMo's
+"thinking" mode so spoken replies start quickly.
+
+Without `MIMO_API_KEY` the offline router still works; online requests
 report that the key is missing. Without `WEATHER_API_KEY` weather lookups
 fail.
 

@@ -6,7 +6,7 @@
 # reflected on at runtime. Without these, R8 renames fields and the app fails in
 # ways that are hard to trace: commands execute but replies come back blank.
 
-# Gson-serialised models: watch <-> phone transport and Groq request/response
+# Gson-serialised models: watch <-> phone transport and LLM request/response
 -keep class com.example.mark.model.** { *; }
 -keep class com.example.mark.network.** { *; }
 

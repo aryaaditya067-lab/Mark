@@ -3,9 +3,9 @@ package com.example.mark.assistant
 /**
  * What a tool hands back.
  *
- * [text] is what Groq reads as the tool result, and what the offline response
+ * [text] is what the LLM reads as the tool result, and what the offline response
  * templates start from — so it must always read as plain, factual English.
- * Tools never throw; a failure is a value, not an exception, because Groq
+ * Tools never throw; a failure is a value, not an exception, because the LLM
  * needs to be told what went wrong in order to explain it.
  */
 sealed interface ToolResult {

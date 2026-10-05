@@ -18,7 +18,7 @@ import com.example.mark.router.IntentType
  *
  * Writing brightness needs WRITE_SETTINGS, which is not a runtime permission —
  * the user grants it once on a system screen. When it is missing the tool does
- * not throw; it returns a Failure telling the user (or Groq) how to grant it.
+ * not throw; it returns a Failure telling the user (or the LLM) how to grant it.
  */
 class BrightnessTool(private val context: Context) : Tool {
 

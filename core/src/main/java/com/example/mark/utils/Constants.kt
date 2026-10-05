@@ -3,10 +3,11 @@ package com.example.mark.utils
 import com.example.mark.core.BuildConfig
 
 object Constants {
-    /** Set GROQ_API_KEY in local.properties; see README. */
-    val GROQ_API_KEY: String = BuildConfig.GROQ_API_KEY
+    /** Set MIMO_API_KEY in local.properties; see README. */
+    val MIMO_API_KEY: String = BuildConfig.MIMO_API_KEY
 
-    const val GROQ_BASE_URL = "https://api.groq.com/"
+    /** Xiaomi MiMo, OpenAI-compatible endpoint. */
+    const val MIMO_BASE_URL = "https://api.xiaomimimo.com/v1/"
 
     /** Set WEATHER_API_KEY in local.properties; see README. */
     val WEATHER_API_KEY: String = BuildConfig.WEATHER_API_KEY
@@ -25,7 +26,8 @@ object Constants {
             "Be concise. Always reply in English."
     const val MAX_HISTORY_MESSAGES = 8
 
-    const val GROQ_MODEL = "llama-3.3-70b-versatile"
+    /** Override with MIMO_MODEL in local.properties. */
+    val MIMO_MODEL: String = BuildConfig.MIMO_MODEL
 
     const val WEB_CLIENT_ID = "541775760070-6gei0p5rdi93sjvja380vup59p0fvc34.apps.googleusercontent.com"
 }

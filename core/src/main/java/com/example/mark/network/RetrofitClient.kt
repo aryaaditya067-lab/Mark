@@ -28,13 +28,13 @@ object RetrofitClient {
             .build()
     }
 
-    val groqApi: GroqApiService by lazy {
+    val llmApi: LlmApiService by lazy {
         Retrofit.Builder()
-            .baseUrl("${Constants.GROQ_BASE_URL}openai/v1/")
+            .baseUrl(Constants.MIMO_BASE_URL)
             .client(okHttp)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(GroqApiService::class.java)
+            .create(LlmApiService::class.java)
     }
 
     val weatherApi: WeatherApiService by lazy {

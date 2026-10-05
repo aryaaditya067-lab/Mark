@@ -9,7 +9,7 @@ import com.example.mark.router.IntentType
  * [Persona], which follows whichever language the user spoke in.
  *
  * Templates only exist for intents the router can resolve offline. Anything
- * else went through Groq and already has natural language.
+ * else went through the LLM and already has natural language.
  */
 object ResponseTemplates {
 

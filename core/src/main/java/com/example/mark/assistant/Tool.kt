@@ -6,19 +6,19 @@ import com.example.mark.router.IntentType
 /**
  * One capability. Reachable two ways:
  *
- *  - Groq function calling, keyed by [name]
+ *  - LLM function calling, keyed by [name]
  *  - the offline intent router, keyed by [intent]
  *
  * A tool that needs parameters the router cannot extract — a time, a device,
  * a free-text title — leaves [intent] null and is only ever reached through
- * Groq. That is not a gap; it is where the line honestly falls.
+ * the LLM. That is not a gap; it is where the line honestly falls.
  */
 interface Tool {
 
-    /** Unique. This is the name Groq calls. */
+    /** Unique. This is the name the LLM calls. */
     val name: String
 
-    /** Schema sent to Groq so it knows when and how to call this tool. */
+    /** Schema sent to the LLM so it knows when and how to call this tool. */
     val definition: FunctionDef
 
     /** Non-null when this tool can be reached without an LLM round trip. */
