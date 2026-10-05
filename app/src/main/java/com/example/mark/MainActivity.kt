@@ -44,8 +44,33 @@ import com.example.mark.viewmodel.VoiceModeViewModel
 import com.example.mark.utils.TextToSpeechManager
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        private const val EXTRA_VOICE = "com.example.mark.extra.VOICE"
+
+        /** Opens Mark straight into voice mode. */
+        fun voiceIntent(context: android.content.Context): android.content.Intent =
+            android.content.Intent(context, MainActivity::class.java)
+                .putExtra(EXTRA_VOICE, true)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    }
+
+    private fun handleVoiceRequest(intent: android.content.Intent?) {
+        if (intent == null) return
+        if (intent.getBooleanExtra(EXTRA_VOICE, false) ||
+            intent.action == android.content.Intent.ACTION_ASSIST ||
+            intent.action == android.content.Intent.ACTION_VOICE_COMMAND
+        ) com.example.mark.assist.VoiceLaunch.request()
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleVoiceRequest(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) handleVoiceRequest(intent)
 
         // NOTE: FirebaseApp.initializeApp() and NetworkProvider.start() are NOT
         // called here — MarkApplication.onCreate already does both. Doing them
@@ -225,6 +250,15 @@ fun MainScreen(settingsRepository: SettingsRepository, ttsManager: TextToSpeechM
             }
         }
     ) { innerPadding ->
+        // The assist gesture / shortcut asked for voice: go there once the
+        // main screen exists (it may have had to pass splash and sign-in first).
+        val voiceRequested by com.example.mark.assist.VoiceLaunch.pending.collectAsState()
+        LaunchedEffect(voiceRequested) {
+            if (voiceRequested && com.example.mark.assist.VoiceLaunch.consume()) {
+                navController.navigate(Screen.VoiceMode.route) { launchSingleTop = true }
+            }
+        }
+
         NavHost(
             navController = navController,
             startDestination = Screen.Chat.route,

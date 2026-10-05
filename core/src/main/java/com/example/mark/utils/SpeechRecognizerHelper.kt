@@ -1,9 +1,11 @@
 package com.example.mark.utils
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
@@ -25,8 +27,31 @@ class SpeechRecognizerHelper(private val context: Context) {
             } else {
                 android.util.Log.d("MarkDiag", "onDeviceRecognition = unsure (API < 31)")
             }
-            SpeechRecognizer.createSpeechRecognizer(context)
+            externalRecognizer(context)
+                ?.let { SpeechRecognizer.createSpeechRecognizer(context, it) }
+                ?: SpeechRecognizer.createSpeechRecognizer(context)
         } else null
+
+    private companion object {
+        const val OWN_CANCEL_WINDOW_MS = 1500L
+        const val GOOGLE_PACKAGE = "com.google.android.googlequicksearchbox"
+
+        /**
+         * A real recognition service from another app, Google's preferred.
+         *
+         * When Mark is the default digital assistant, Android makes Mark's own
+         * (stub) RecognitionService the system default, and a plain
+         * createSpeechRecognizer(context) would bind to it and hear nothing.
+         * So the recognizer is always picked explicitly, never our own.
+         */
+        fun externalRecognizer(context: Context): ComponentName? {
+            val services = context.packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+                .map { it.serviceInfo }
+                .filter { it.packageName != context.packageName }
+            val pick = services.firstOrNull { it.packageName == GOOGLE_PACKAGE } ?: services.firstOrNull()
+            return pick?.let { ComponentName(it.packageName, it.name) }
+        }
+    }
 
     private val _partialResults = MutableStateFlow("")
     val partialResults: StateFlow<String> = _partialResults.asStateFlow()
@@ -160,10 +185,6 @@ class SpeechRecognizerHelper(private val context: Context) {
 
     fun shutdown() {
         recognizer?.destroy()
-    }
-
-    private companion object {
-        const val OWN_CANCEL_WINDOW_MS = 1500L
     }
 
     private fun errorText(code: Int): String = when (code) {

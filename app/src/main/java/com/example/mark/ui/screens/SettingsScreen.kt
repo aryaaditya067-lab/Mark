@@ -104,6 +104,28 @@ fun SettingsScreen(
                 )
             }
 
+            val isAssistant = remember {
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                    context.getSystemService(android.app.role.RoleManager::class.java)
+                        ?.isRoleHeld(android.app.role.RoleManager.ROLE_ASSISTANT) == true
+            }
+            ListItem(
+                headlineContent = { Text("Make Mark your assistant") },
+                supportingContent = {
+                    Text(
+                        if (isAssistant) "Done: long-press power (or the assist gesture) opens Mark"
+                        else "Default apps > Digital assistant app > Mark. Then long-press power to talk."
+                    )
+                },
+                modifier = Modifier.clickable {
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+                    }.onFailure {
+                        runCatching { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                    }
+                }
+            )
+
             ListItem(
                 headlineContent = { Text("Do Not Disturb access") },
                 supportingContent = { Text(if (isDndGranted) "Granted" else "Tap to allow Mark to manage DND") },
