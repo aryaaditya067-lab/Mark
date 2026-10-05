@@ -59,6 +59,7 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     private var proactiveSpokenThisSession = false
     private var lastBatteryLevel = -1
     private var batteryHysteresis = false
+    private var criticalBatterySpoken = false
 
     // Registered on the application context, so it outlives this ViewModel
     // unless unregistered in onCleared(). Declared above init, which assigns it.
@@ -114,9 +115,9 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
         if (today != lastBrief && hour in 5..11) {
             viewModelScope.launch {
                 val brief = buildMorningBrief()
-                prefs.edit().putString("lastBriefDate", today).apply()
                 android.util.Log.d("MarkBrief", "playing morning brief")
-                speakProactive(brief)
+                // Only a brief that was actually spoken counts as today's brief.
+                if (speakProactive(brief)) prefs.edit().putString("lastBriefDate", today).apply()
             }
             return true
         }
@@ -138,9 +139,14 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
             briefParts.add("${cache.tempCelsius} degrees outside, ${cache.conditionShort}")
         }
 
-        val nextEvent = fetchNextCalendarEvent()
-        if (nextEvent != null) briefParts.add(nextEvent)
-        else briefParts.add("Aaj koi event nahi hai")
+        // Say "no events" only when the calendar could actually be read;
+        // without permission it used to claim an empty day every morning.
+        if (canReadCalendar()) {
+            val nextEvent = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { fetchNextCalendarEvent() }.getOrNull()
+            }
+            briefParts.add(nextEvent ?: "Aaj koi event nahi hai")
+        }
 
         val battery = getBatteryLevel()
         if (battery < 40) briefParts.add("Battery $battery percent")
@@ -200,21 +206,33 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
         if (pct == lastBatteryLevel) return
         lastBatteryLevel = pct
         if (pct > 25) batteryHysteresis = false
-        if (pct <= 5 && !proactiveSpokenThisSession) speakProactive("Sir, battery bahut kam hai.")
-        else if (pct <= 15 && !batteryHysteresis && !proactiveSpokenThisSession) {
+        // The critical warning is allowed even after another proactive line.
+        if (pct <= 5 && !criticalBatterySpoken) {
+            if (speakProactive("Sir, battery bahut kam hai, sirf $pct percent.", critical = true)) criticalBatterySpoken = true
+        } else if (pct in 6..15 && !batteryHysteresis && !proactiveSpokenThisSession) {
             batteryHysteresis = true
-            speakProactive("Sir, battery pandrah percent hai.")
+            speakProactive("Sir, battery $pct percent hai.")
         }
     }
 
-    private fun speakProactive(text: String) {
-        if (_uiState.value.isListening || _uiState.value.isLoading || proactiveSpokenThisSession) return
+    /** @return true if the line was actually spoken. */
+    private fun speakProactive(text: String, critical: Boolean = false): Boolean {
+        // tts.isSpeaking, not the UI copy: at launch the greeting has been queued
+        // but the UI state has not caught up, and a sticky battery broadcast
+        // used to cut the greeting off mid-word.
+        if (_uiState.value.isListening || _uiState.value.isLoading || tts.isSpeaking.value) return false
+        if (proactiveSpokenThisSession && !critical) return false
         proactiveSpokenThisSession = true
         tts.speak(text)
+        return true
     }
 
+    private fun canReadCalendar(): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_CALENDAR) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     private fun fetchNextCalendarEvent(): String? {
-        if (androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_CALENDAR) != android.content.pm.PackageManager.PERMISSION_GRANTED) return null
+        if (!canReadCalendar()) return null
 
         val now = System.currentTimeMillis()
         val endOfDay = java.util.Calendar.getInstance().apply {
@@ -233,8 +251,9 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
             if (cursor.moveToFirst()) {
                 val title = cursor.getString(0)
                 val start = cursor.getLong(1)
-                val time = java.text.SimpleDateFormat("h baje", java.util.Locale.getDefault()).format(java.util.Date(start))
-                "$title $time hai"
+                // "h baje" as one pattern threw: 'b' is not a valid pattern letter.
+                val hour = java.text.SimpleDateFormat("h", java.util.Locale.getDefault()).format(java.util.Date(start))
+                "$title $hour baje hai"
             } else null
         }
     }
@@ -361,7 +380,8 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                     }
                     is com.example.mark.assistant.AssistantEvent.Error -> {
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
-                        tts.speak(event.throwable.message ?: "Error")
+                        // Never read raw exception text aloud.
+                        tts.speak(spokenError(event.throwable))
                     }
                     is com.example.mark.assistant.AssistantEvent.Done -> {
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
@@ -386,6 +406,15 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             }
+        }
+    }
+
+    private fun spokenError(t: Throwable): String {
+        val msg = t.message.orEmpty()
+        return when {
+            "API key" in msg -> "Sir, my online brain isn't set up yet."
+            t is java.io.IOException -> "Sir, I can't reach the internet right now."
+            else -> "Sorry sir, something went wrong."
         }
     }
 

@@ -28,37 +28,45 @@ class HeartRateReader(context: Context) {
         DataType.HEART_RATE_BPM in caps.supportedDataTypesMeasure
     }.getOrDefault(false)
 
-    /** @return bpm, or null if the sensor never produced a reading in time. */
-    suspend fun readOnce(timeoutMs: Long = 20_000): Double? =
-        withTimeoutOrNull(timeoutMs) {
-            suspendCancellableCoroutine { cont ->
-                val callback = object : MeasureCallback {
+    /**
+     * @return bpm, or null if the sensor never produced a reading in time.
+     *
+     * The callback is unregistered on every exit. It used to be removed only on
+     * cancellation, so a successful read left the optical sensor running and
+     * each call stacked another listener.
+     */
+    suspend fun readOnce(timeoutMs: Long = 20_000): Double? {
+        var registered: MeasureCallback? = null
+        return try {
+            withTimeoutOrNull(timeoutMs) {
+                suspendCancellableCoroutine { cont ->
+                    val callback = object : MeasureCallback {
 
-                    override fun onAvailabilityChanged(
-                        dataType: DeltaDataType<*, *>,
-                        availability: Availability
-                    ) {
-                        // Ignored — we just wait for data, or time out.
+                        override fun onAvailabilityChanged(
+                            dataType: DeltaDataType<*, *>,
+                            availability: Availability
+                        ) {
+                            // Ignored — we just wait for data, or time out.
+                        }
+
+                        override fun onDataReceived(data: DataPointContainer) {
+                            val bpm = data.getData(DataType.HEART_RATE_BPM)
+                                .lastOrNull()
+                                ?.value
+                                ?: return
+
+                            if (cont.isActive) cont.resume(bpm)
+                        }
                     }
 
-                    override fun onDataReceived(data: DataPointContainer) {
-                        val bpm = data.getData(DataType.HEART_RATE_BPM)
-                            .lastOrNull()
-                            ?.value
-                            ?: return
-
-                        if (cont.isActive) cont.resume(bpm)
-                    }
-                }
-
-                measureClient.registerMeasureCallback(DataType.HEART_RATE_BPM, callback)
-
-                cont.invokeOnCancellation {
-                    measureClient.unregisterMeasureCallbackAsync(
-                        DataType.HEART_RATE_BPM, callback
-                    )
+                    registered = callback
+                    measureClient.registerMeasureCallback(DataType.HEART_RATE_BPM, callback)
                 }
             }
+        } finally {
+            registered?.let {
+                measureClient.unregisterMeasureCallbackAsync(DataType.HEART_RATE_BPM, it)
+            }
         }
+    }
 }
-

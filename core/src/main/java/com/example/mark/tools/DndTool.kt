@@ -32,8 +32,16 @@ class DndTool(private val context: Context) : Tool {
             ?: return ToolResult.Failure("Notification service not available.", reason = "service_error")
 
         if (!manager.isNotificationPolicyAccessGranted) {
+            // Take the user straight to the switch rather than just refusing.
+            val opened = runCatching {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.isSuccess
             return ToolResult.Failure(
-                "Do Not Disturb permission not granted. Please enable it in system settings.",
+                if (opened) "I need Do Not Disturb access. I've opened the setting, sir: turn on Mark."
+                else "Do Not Disturb permission not granted. Please enable it in system settings.",
                 reason = "no_permission"
             )
         }
