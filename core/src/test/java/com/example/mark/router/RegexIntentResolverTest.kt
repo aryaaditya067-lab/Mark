@@ -69,6 +69,21 @@ class RegexIntentResolverTest {
     }
 
     @Test
+    fun testRemindMeToIsATask() {
+        val match = resolver.resolve("remind me to buy milk")
+        assertEquals(IntentType.ADD_TASK, match.intent?.type)
+        assertEquals("buy milk", match.intent?.params?.get("content"))
+    }
+
+    @Test
+    fun testRemindMeToCallIsATaskNotACall() {
+        // Used to route to CALL_CONTACT and dial "Mom" immediately.
+        val match = resolver.resolve("remind me to call mom tomorrow")
+        assertEquals(IntentType.ADD_TASK, match.intent?.type)
+        assertEquals("call mom tomorrow", match.intent?.params?.get("content"))
+    }
+
+    @Test
     fun testGetTasksIntent() {
         val match = resolver.resolve("task dikha")
         assertEquals(IntentType.GET_TASKS, match.intent?.type)

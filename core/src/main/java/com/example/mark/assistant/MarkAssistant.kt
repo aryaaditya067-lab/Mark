@@ -22,6 +22,10 @@ import com.example.mark.tools.TimeTool
 import com.example.mark.tools.VolumeTool
 import com.example.mark.tools.WatchStatusTool
 import com.example.mark.tools.WeatherTool
+import com.example.mark.repository.FirestoreMemoryStore
+import com.example.mark.repository.LocalMemoryStore
+import com.example.mark.tools.ForgetFactTool
+import com.example.mark.tools.RememberFactTool
 import com.example.mark.utils.LazyLocationProvider
 import com.example.mark.utils.PlayLocationProvider
 
@@ -50,11 +54,15 @@ object MarkAssistant {
         val appContext = context.applicationContext
         val pm = appContext.packageManager
         val isWatch = pm.hasSystemFeature(PackageManager.FEATURE_WATCH)
+        // The watch never touches Firestore, so its memory stays on the watch.
+        val memory = if (isWatch) LocalMemoryStore(appContext) else FirestoreMemoryStore()
 
         val tools = buildList {
             add(AddTaskTool())
             add(GetTasksTool())
             add(CompleteTaskTool())
+            add(RememberFactTool(memory))
+            add(ForgetFactTool(memory))
             add(AlarmTool(appContext))
             
             val location = if (isWatch) {
@@ -89,7 +97,8 @@ object MarkAssistant {
         return AssistantController(
             toolManager = ToolManager(ToolRegistry(tools)),
             isWatch = isWatch,
-            transport = if (isWatch) CommandTransport(appContext) else null
+            transport = if (isWatch) CommandTransport(appContext) else null,
+            memory = memory
         )
     }
 }

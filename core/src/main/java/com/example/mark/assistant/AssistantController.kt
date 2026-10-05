@@ -5,6 +5,8 @@ import com.example.mark.model.CommandResult
 import com.example.mark.model.Message
 import com.example.mark.network.*
 import com.example.mark.repository.ChatHistoryRepository
+import com.example.mark.repository.MemoryFacts
+import com.example.mark.repository.MemoryStore
 import com.example.mark.router.IntentRouter
 import com.example.mark.router.IntentType
 import com.example.mark.router.ReplyMode
@@ -28,6 +30,7 @@ class AssistantController(
     private val historyProvider: () -> ChatHistoryRepository? = { ChatHistoryRepository.instance },
     private val isWatch: Boolean = false,
     private val transport: CommandTransport? = null,
+    private val memory: MemoryStore? = null,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) {
 
@@ -76,6 +79,8 @@ class AssistantController(
         private const val MAX_TOOL_ROUNDS = 5
 
         private val MARKDOWN_SYMBOLS = Regex("[*#`]")
+
+        private const val MEMORY_TIMEOUT_MS = 1500L
 
         // Intents that ALWAYS run on the phone when spoken from the watch.
         private val ALWAYS_REMOTE = setOf(
@@ -405,9 +410,13 @@ class AssistantController(
         val past = if (isWatch) watchSessionHistory.toList()
         else runCatching { historyProvider()?.recent(Constants.MAX_HISTORY_MESSAGES) }.getOrNull() ?: emptyList()
         val stored = HistoryWindow.select(past, Constants.MAX_HISTORY_MESSAGES)
+        // Memory is a nice-to-have for a turn, never a reason to stall it.
+        val facts = memory?.let { store ->
+            withTimeoutOrNull(MEMORY_TIMEOUT_MS) { runCatching { store.all() }.getOrNull() }
+        }?.let(MemoryFacts::forPrompt).orEmpty()
         persist(Message(role = "user", content = userText))
         val messages = buildList {
-            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt(isWatch)))
+            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt(isWatch, facts)))
             addAll(stored.map { it.toLlmMessage() })
             add(LlmMessage(role = "user", content = userText))
         }.toMutableList()

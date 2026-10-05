@@ -1,11 +1,13 @@
 package com.example.mark.assistant
 
+import com.example.mark.model.MemoryFact
 import com.example.mark.network.FunctionDef
 import com.example.mark.network.LlmApiService
 import com.example.mark.network.LlmRequest
 import com.example.mark.network.LlmResponse
 import com.example.mark.network.Parameters
 import com.example.mark.network.Property
+import com.example.mark.repository.MemoryStore
 import com.example.mark.router.IntentType
 import com.google.gson.Gson
 import kotlinx.coroutines.flow.toList
@@ -70,10 +72,11 @@ class AssistantControllerLlmTest {
         override fun needsConfirmation(request: ToolRequest) = confirm
     }
 
-    private fun controller(api: LlmApiService, vararg tools: Tool) = AssistantController(
+    private fun controller(api: LlmApiService, vararg tools: Tool, memory: MemoryStore? = null) = AssistantController(
         toolManager = ToolManager(ToolRegistry(tools.toList())),
         api = api,
         historyProvider = { null },
+        memory = memory,
     )
 
     private fun AssistantController.ask(text: String) = runBlocking { send(text).toList() }
@@ -107,6 +110,38 @@ class AssistantControllerLlmTest {
         assertEquals("system", system.role)
         assertTrue(system.content!!.contains("JARVIS"))
         assertTrue(system.content!!.contains("Android phone"))
+    }
+
+    @Test
+    fun rememberedFactsReachThePrompt() {
+        val memory = object : MemoryStore {
+            override suspend fun all() = listOf(MemoryFact(text = "His wife's birthday is 12 March"))
+            override suspend fun add(fact: MemoryFact) {}
+            override suspend fun remove(ids: Set<String>) {}
+        }
+        val api = FakeLlm(text("The 12th of March, sir."))
+        controller(api, memory = memory).ask(question)
+        assertTrue(api.requests.single().messages.first().content!!.contains("- His wife's birthday is 12 March"))
+    }
+
+    @Test
+    fun slowMemoryDoesNotBlockTheTurn() {
+        val memory = object : MemoryStore {
+            override suspend fun all(): List<MemoryFact> { kotlinx.coroutines.awaitCancellation() }
+            override suspend fun add(fact: MemoryFact) {}
+            override suspend fun remove(ids: Set<String>) {}
+        }
+        val api = FakeLlm(text("Hi."))
+        assertEquals(listOf("Hi."), controller(api, memory = memory).ask(question).texts())
+    }
+
+    @Test
+    fun yaadRakhnaIsAFactForTheModelNotATask() {
+        val task = RecordingTool("add_task", intent = IntentType.ADD_TASK)
+        val api = FakeLlm(text("Noted, sir."))
+        controller(api, task).ask("yaad rakhna meri car ki chabi drawer mein hai")
+        assertEquals(0, task.calls.size)
+        assertEquals(1, api.requests.size)
     }
 
     @Test

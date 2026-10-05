@@ -37,6 +37,9 @@ object Constants {
             "When the user explicitly asks how they are doing, how things are going, or for a check-in (a " +
             "greeting alone is not a check-in), call several tools at once and weave the results into one " +
             "short, natural answer.\n" +
+            "When the user tells you something lasting about themselves (people, preferences, where they " +
+            "keep things) or says 'remember' / 'yaad rakhna', save it with remember_fact and acknowledge " +
+            "briefly; use forget_fact when they ask you to forget. Use what you know naturally.\n" +
             "If you don't know something and no tool can find it, say so briefly. Never invent facts about the user."
     const val MAX_HISTORY_MESSAGES = 8
 

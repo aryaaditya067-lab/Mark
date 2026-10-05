@@ -18,7 +18,11 @@ object PromptBuilder {
      * @param isWatch which device this conversation is happening on; it decides
      *   what "here" means and which actions travel to the phone.
      */
-    fun systemPrompt(isWatch: Boolean = false, now: LocalDateTime = LocalDateTime.now()): String =
+    fun systemPrompt(
+        isWatch: Boolean = false,
+        facts: List<String> = emptyList(),
+        now: LocalDateTime = LocalDateTime.now()
+    ): String =
         buildString {
             append(Constants.SYSTEM_PROMPT)
             append("\n\n")
@@ -32,5 +36,10 @@ object PromptBuilder {
             append("\nUse this to resolve relative times such as 'tomorrow', ")
             append("'in 20 minutes', '4 in the morning' (04:00) or ")
             append("'4 in the evening' (16:00).")
+            if (facts.isNotEmpty()) {
+                append("\n\nWhat you know about the user from earlier conversations ")
+                append("(use it naturally; don't recite it unless asked):")
+                facts.forEach { append("\n- ").append(it) }
+            }
         }
 }

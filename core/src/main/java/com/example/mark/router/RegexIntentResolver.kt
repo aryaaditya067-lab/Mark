@@ -34,7 +34,11 @@ class RegexIntentResolver {
         private const val SLEEP      = "sleep|slept|rest|sleeping|neend|nind|soya|soyi"
         private const val HEART      = "heart ?rate|heart ?beat|pulse|bpm|dhadkan|dil ki dhadkan|hr|heart"
         private const val WEATHER    = "weather|temperature|forecast|rain|raining|barish|baaris|hot|cold|garmi|thand|mausam"
-        private const val T_ADD      = "task add kar|ye kaam add kar|note kar|yaad rakhna|task banao|add task|remind me to"
+        // "yaad rakhna" is deliberately absent: "yaad rakhna, meri car ki chabi drawer
+        // mein hai" is a fact to remember, not a to-do, so it goes to the LLM.
+        // "remind to", not "remind me to": "me" is a filler token and is stripped
+        // before matching, so "remind me to" could never match.
+        private const val T_ADD      = "task add kar|ye kaam add kar|note kar|task banao|add task|remind to"
         // NOTE: "hai" is a filler token and is stripped before matching, so patterns must not contain it.
         private const val T_GET      = "task dikha|kya kaam|mere tasks|task list|pending kaam|what are my tasks|my tasks"
         private const val T_DONE     = "task \\d+ as done|task \\d+ done|task complete|ye kaam ho gaya|task done|mark done|complete kar"
@@ -370,12 +374,17 @@ class RegexIntentResolver {
     private val spanLeading = Regex("""^(?:to|ke|tak|par|se|pe|the|a|an|my|mere)\s+""")
     private val spanTrailing = Regex("""\s+(?:dikhao|dikha|batao|bata|karo|kardo|kar|chalao|chala|milao|mila|lagao|laga|do|de|please|phone|mobile)$""")
 
+    /**
+     * The anchor was matched on NORMALIZED text, where fillers ("me", "please")
+     * are gone, but the content is cut from the raw input. So the anchor is
+     * located in the raw input allowing one dropped word between its tokens:
+     * anchor "remind to" finds "remind me to".
+     */
     private fun extractTaskContent(rawInput: String, anchor: String): String? {
-        val lowerRaw = rawInput.lowercase()
-        val anchorIdx = lowerRaw.indexOf(anchor.lowercase())
-        if (anchorIdx == -1) return null
-        val content = rawInput.substring(anchorIdx + anchor.length).trim()
-        return content.ifBlank { null }
+        val tokens = anchor.trim().split(Regex("""\s+""")).map { Regex.escape(it) }
+        val pattern = Regex(tokens.joinToString("""\s+(?:\S+\s+)?"""), RegexOption.IGNORE_CASE)
+        val match = pattern.find(rawInput) ?: return null
+        return rawInput.substring(match.range.last + 1).trim().ifBlank { null }
     }
 
     private fun extractTaskIndex(text: String): String? =
@@ -603,10 +612,11 @@ class RegexIntentResolver {
         Rule(IntentType.SET_ROTATE, Regex("""\b(?:$ROTATE)\b"""),
             extractors = listOf("lock_state")),
 
+        // "remind": "remind me to call mom" is a to-do, not a call to place now.
         Rule(IntentType.CALL_CONTACT, Regex("""\b(?:$CALL)\b"""), extractors = listOf("contact"),
-            blockedBy = Regex("""(?i)\b(?:create|schedule\s+(?:a|an))\b""")),
+            blockedBy = Regex("""(?i)\b(?:create|schedule\s+(?:a|an)|remind)\b""")),
         Rule(IntentType.SEND_SMS, Regex("""\b(?:$SMS)\b"""), extractors = listOf("message_body"),
-            blockedBy = Regex("""(?i)\b(?:create|schedule\s+(?:a|an))\b""")),
+            blockedBy = Regex("""(?i)\b(?:create|schedule\s+(?:a|an)|remind)\b""")),
 
         Rule(IntentType.RING_PHONE, Regex("""\b(?:$RING)\b.*\b(?:$PHONE)\b"""),
             extractors = listOf("state"), priority = 5),
