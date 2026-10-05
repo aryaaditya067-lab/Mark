@@ -6,7 +6,11 @@ import com.example.mark.health.HealthConnectProvider
 import com.example.mark.repository.SettingsRepository
 import com.example.mark.repository.ContactRepository
 import com.example.mark.tool.*
+import com.example.mark.reminder.AndroidReminders
+import com.example.mark.tools.CancelReminderTool
 import com.example.mark.tools.HomeTool
+import com.example.mark.tools.ListRemindersTool
+import com.example.mark.tools.SetReminderTool
 import com.example.mark.tools.SleepTool
 import com.example.mark.tools.StepsTool
 import com.example.mark.utils.SpeechRecognizerHelper
@@ -40,6 +44,7 @@ class MarkApplication : Application() {
         }
 
         // Initialize the shared AssistantController with phone-specific tools
+        val reminders = AndroidReminders(this)
         MarkAssistant.get(
             this,
             extraTools = listOf(
@@ -57,7 +62,10 @@ class MarkApplication : Application() {
                 CallTool(this),
                 CallExecuteTool(this),
                 SmsTool(this),
-                SmsExecuteTool(this)
+                SmsExecuteTool(this),
+                SetReminderTool(reminders),
+                ListRemindersTool(reminders),
+                CancelReminderTool(reminders)
             )
         )
     }

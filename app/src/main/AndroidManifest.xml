@@ -19,6 +19,12 @@
          DND tool could only ever answer "no permission". -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
+    <!-- Reminders: notify, fire on time (exact when the user allows "Alarms &
+         reminders", otherwise within a few minutes), and survive reboots. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- MainActivity has always requested these two, but they were never
          declared — Android silently auto-denies undeclared permissions, so the
          calendar tool never worked on the phone, which also broke the watch's
@@ -85,6 +91,19 @@
                     android:scheme="wear" />
             </intent-filter>
         </service>
+
+        <receiver
+            android:name=".reminder.ReminderReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".reminder.ReminderBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".service.MarkNotificationService"

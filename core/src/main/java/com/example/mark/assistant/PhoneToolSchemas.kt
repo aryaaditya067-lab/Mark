@@ -56,6 +56,35 @@ object PhoneToolSchemas {
         required = listOf("number", "body")
     )
 
+    val SET_REMINDER = FunctionDef(
+        name = "set_reminder",
+        description = "Remind the user at a time with a notification on the phone and the watch. Use for " +
+            "'remind me at 6', 'kal subah yaad dilana', 'in 20 minutes remind me'. Give either 'at' or " +
+            "'in_minutes'. Not for waking up (use set_alarm) or to-dos without a time (use add_task).",
+        parameters = Parameters(
+            properties = mapOf(
+                "text" to Property("string", "What to remind about, short, e.g. 'Take your medicine'"),
+                "at" to Property("string", "Local date-time in ISO format, e.g. 2026-10-05T18:00"),
+                "in_minutes" to Property("integer", "Minutes from now, instead of 'at'"),
+                "repeat" to Property("string", "none, daily or weekly")
+            ),
+            required = listOf("text")
+        )
+    )
+    val LIST_REMINDERS = FunctionDef(
+        name = "list_reminders",
+        description = "List the user's upcoming reminders.",
+        parameters = Parameters(properties = emptyMap())
+    )
+    val CANCEL_REMINDER = FunctionDef(
+        name = "cancel_reminder",
+        description = "Cancel reminders whose text contains all the words of the query.",
+        parameters = Parameters(
+            properties = mapOf("query" to Property("string", "Key words of the reminder, e.g. 'medicine'")),
+            required = listOf("query")
+        )
+    )
+
     /** Schema, offline intent, and whether a spoken yes is required. */
     data class Entry(val definition: FunctionDef, val intent: IntentType, val needsConfirmation: Boolean = false)
 
@@ -73,6 +102,9 @@ object PhoneToolSchemas {
         Entry(CALL_EXECUTE, IntentType.CALL_EXECUTE, needsConfirmation = true),
         Entry(SEND_SMS, IntentType.SEND_SMS),
         Entry(SMS_EXECUTE, IntentType.SMS_EXECUTE, needsConfirmation = true),
+        Entry(SET_REMINDER, IntentType.SET_REMINDER),
+        Entry(LIST_REMINDERS, IntentType.LIST_REMINDERS),
+        Entry(CANCEL_REMINDER, IntentType.CANCEL_REMINDER),
     )
 
     /** Watch side: proxies for every phone tool not already registered locally. */

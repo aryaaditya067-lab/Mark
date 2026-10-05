@@ -587,7 +587,10 @@ class RegexIntentResolver {
         Rule(IntentType.GET_WEATHER, Regex("""\b(?:$WEATHER)\b""")),
 
         Rule(IntentType.COMPLETE_TASK, Regex("""\b(?:$T_DONE)\b"""), extractors = listOf("task_index"), priority = 5),
-        Rule(IntentType.ADD_TASK, Regex("""\b(?:$T_ADD)\b"""), extractors = listOf("task_content"), priority = 5),
+        // A to-do with a time ("remind me to call mom at 6", "kal subah note kar")
+        // is a reminder that must fire, so it goes to the LLM's set_reminder.
+        Rule(IntentType.ADD_TASK, Regex("""\b(?:$T_ADD)\b"""), extractors = listOf("task_content"), priority = 5,
+            blockedBy = Regex("""(?i)\b(?:\d{1,2}(?::\d{2})?\s*(?:baje|bje|am|pm)|at\s+\d{1,2}|in\s+\d+|\d+\s*(?:minute|minutes|min|mins|ghante|ghanta|hour|hours)|tomorrow|tonight|subah|shaam|sham|raat|dopahar|morning|evening|kal)\b""")),
         Rule(IntentType.GET_TASKS, Regex("""\b(?:$T_GET)\b"""), blockedBy = Regex("""(?i)\b(?:delete|remove)\b""")),
 
         Rule(IntentType.GET_CALENDAR, Regex("""\b(?:$CALENDAR)\b""")),

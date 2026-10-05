@@ -76,11 +76,19 @@ class RegexIntentResolverTest {
     }
 
     @Test
-    fun testRemindMeToCallIsATaskNotACall() {
+    fun testRemindMeToCallIsNotACall() {
         // Used to route to CALL_CONTACT and dial "Mom" immediately.
-        val match = resolver.resolve("remind me to call mom tomorrow")
+        val match = resolver.resolve("remind me to call mom")
         assertEquals(IntentType.ADD_TASK, match.intent?.type)
-        assertEquals("call mom tomorrow", match.intent?.params?.get("content"))
+        assertEquals("call mom", match.intent?.params?.get("content"))
+    }
+
+    @Test
+    fun testTimedReminderGoesToTheModel() {
+        // A to-do with a time must actually fire, so the LLM schedules it with set_reminder.
+        for (phrase in listOf("remind me to call mom tomorrow", "remind me to take medicine at 6", "note kar dawai 6 baje")) {
+            assertEquals(phrase, null, resolver.resolve(phrase).intent)
+        }
     }
 
     @Test

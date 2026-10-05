@@ -103,12 +103,15 @@ fun MainScreen(settingsRepository: SettingsRepository, ttsManager: TextToSpeechM
     val navController = rememberNavController()
     val items = listOf(Screen.Chat, Screen.Tasks, Screen.Settings)
 
-    val requiredPermissions = listOf(
+    val requiredPermissions = listOfNotNull(
         Manifest.permission.CALL_PHONE,
         Manifest.permission.READ_CONTACTS,
         Manifest.permission.SEND_SMS,
         Manifest.permission.READ_CALENDAR,
-        Manifest.permission.WRITE_CALENDAR
+        Manifest.permission.WRITE_CALENDAR,
+        // Reminders and the morning brief arrive as notifications.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU)
+            Manifest.permission.POST_NOTIFICATIONS else null
     )
 
     var missingPermissions by remember {

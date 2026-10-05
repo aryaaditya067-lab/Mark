@@ -14,7 +14,8 @@ class ToolRequest private constructor(
 
     fun string(key: String): String? = params[key]?.takeIf { it.isNotBlank() }
 
-    fun int(key: String): Int? = params[key]?.toIntOrNull()
+    /** Also accepts "20.0": JSON numbers from the LLM are not always integers. */
+    fun int(key: String): Int? = params[key]?.let { it.toIntOrNull() ?: it.toDoubleOrNull()?.toInt() }
 
     fun boolean(key: String, default: Boolean): Boolean =
         params[key]?.toBooleanStrictOrNull() ?: default

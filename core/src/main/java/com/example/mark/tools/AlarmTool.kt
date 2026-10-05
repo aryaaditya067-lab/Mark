@@ -38,7 +38,13 @@ class AlarmTool(private val context: Context) : Tool {
             "off" -> dismissAlarm()
             "snooze" -> snoozeAlarm()
             else -> {
-                val time = request.string("time") ?: return ToolResult.Failure("What time should I set the alarm for?", reason = "missing_arg")
+                // "10 minute baad alarm": the router extracts relative_minutes, which
+                // used to be ignored, so the alarm was never set.
+                val time = request.string("time")
+                    ?: request.int("relative_minutes")?.takeIf { it > 0 }?.let {
+                        java.time.LocalTime.now().plusMinutes(it.toLong()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+                    }
+                    ?: return ToolResult.Failure("What time should I set the alarm for?", reason = "missing_arg")
                 setAlarm(time)
             }
         }

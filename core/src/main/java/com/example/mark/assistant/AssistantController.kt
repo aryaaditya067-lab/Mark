@@ -112,7 +112,9 @@ class AssistantController(
             IntentType.SET_ROTATE, IntentType.MEDIA_CONTROL, IntentType.READ_NOTIFICATIONS, IntentType.READ_LAST_MESSAGE,
             IntentType.CHECK_NEW_MESSAGES, IntentType.UNREAD_COUNT, IntentType.NAVIGATE_TO, IntentType.GET_DISTANCE,
             IntentType.FIND_NEARBY, IntentType.TAKE_SCREENSHOT, IntentType.CALL_CONTACT, IntentType.CALL_EXECUTE,
-            IntentType.SEND_SMS, IntentType.SMS_EXECUTE, IntentType.GO_HOME, IntentType.LAPTOP_CONTROL
+            IntentType.SEND_SMS, IntentType.SMS_EXECUTE, IntentType.GO_HOME, IntentType.LAPTOP_CONTROL,
+            // Reminders are scheduled and fire on the phone; the watch gets them as notifications.
+            IntentType.SET_REMINDER, IntentType.LIST_REMINDERS, IntentType.CANCEL_REMINDER
         )
 
         // Intents that run on the phone UNLESS the user said "watch pe ...".
