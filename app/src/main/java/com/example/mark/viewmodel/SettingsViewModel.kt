@@ -3,6 +3,9 @@ package com.example.mark.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mark.assistant.MarkAssistant
+import com.example.mark.assistant.ToolRequest
+import com.example.mark.assistant.ToolResult
+import com.example.mark.tools.LaptopTool
 import com.example.mark.model.MemoryFact
 import com.example.mark.repository.MemoryStore
 import com.example.mark.repository.SettingsRepository
@@ -20,8 +23,32 @@ import kotlinx.coroutines.launch
 class SettingsViewModel(
     private val repository: SettingsRepository,
     val ttsManager: TextToSpeechManager,
-    private val memory: MemoryStore? = null
+    private val memory: MemoryStore? = null,
+    private val laptop: LaptopTool? = null
 ) : ViewModel() {
+
+    // ---- Laptop ----
+
+    private val _laptopConfig = MutableStateFlow(laptop?.config() ?: LaptopTool.Config("", "", ""))
+    val laptopConfig: StateFlow<LaptopTool.Config> = _laptopConfig.asStateFlow()
+
+    private val _laptopStatus = MutableStateFlow<String?>(null)
+    /** Result of the last "Test connection", shown under the laptop fields. */
+    val laptopStatus: StateFlow<String?> = _laptopStatus.asStateFlow()
+
+    fun saveLaptop(host: String, token: String, mac: String) {
+        val tool = laptop ?: return
+        tool.configure(host, token, mac)
+        _laptopConfig.value = tool.config()
+        _laptopStatus.value = null
+    }
+
+    fun testLaptop() = viewModelScope.launch {
+        val tool = laptop ?: return@launch
+        _laptopStatus.value = "Checking…"
+        val result = tool.execute(ToolRequest.of(mapOf("action" to "status")))
+        _laptopStatus.value = if (result is ToolResult.Failure) result.text else "Laptop online, sir. ${result.text}"
+    }
 
     /** What Mark should call the user. */
     val userName: StateFlow<String> = repository.userName

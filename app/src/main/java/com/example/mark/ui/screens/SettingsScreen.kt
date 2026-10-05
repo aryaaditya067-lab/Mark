@@ -38,6 +38,8 @@ fun SettingsScreen(
     val savedPlaces by settingsViewModel.savedPlaces.collectAsState()
     val userName by settingsViewModel.userName.collectAsState()
     val facts by settingsViewModel.facts.collectAsState()
+    val laptopConfig by settingsViewModel.laptopConfig.collectAsState()
+    val laptopStatus by settingsViewModel.laptopStatus.collectAsState()
     LaunchedEffect(Unit) { settingsViewModel.refreshFacts() }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -202,6 +204,54 @@ fun SettingsScreen(
                     }
                 }
             )
+
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("Laptop", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "For the Mark agent on your Windows laptop (same Wi-Fi). Give the laptop a fixed " +
+                    "address in your router so this keeps working. The MAC address lets Mark wake it up.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+            )
+
+            var laptopHost by remember(laptopConfig) { mutableStateOf(laptopConfig.host) }
+            var laptopToken by remember(laptopConfig) { mutableStateOf(laptopConfig.token) }
+            var laptopMac by remember(laptopConfig) { mutableStateOf(laptopConfig.mac) }
+
+            OutlinedTextField(
+                value = laptopHost,
+                onValueChange = { laptopHost = it },
+                label = { Text("Laptop IP address, e.g. 192.168.1.20") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            )
+            OutlinedTextField(
+                value = laptopToken,
+                onValueChange = { laptopToken = it },
+                label = { Text("Agent token") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            )
+            OutlinedTextField(
+                value = laptopMac,
+                onValueChange = { laptopMac = it },
+                label = { Text("MAC address (optional, for wake-up)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { settingsViewModel.saveLaptop(laptopHost, laptopToken, laptopMac) }) {
+                    Text("Save")
+                }
+                OutlinedButton(onClick = {
+                    settingsViewModel.saveLaptop(laptopHost, laptopToken, laptopMac)
+                    settingsViewModel.testLaptop()
+                }) { Text("Test connection") }
+            }
+            laptopStatus?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 8.dp))
+            }
 
             HorizontalDivider()
             Spacer(Modifier.height(12.dp))

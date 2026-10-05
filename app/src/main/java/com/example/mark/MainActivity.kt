@@ -130,7 +130,9 @@ fun MainScreen(settingsRepository: SettingsRepository, ttsManager: TextToSpeechM
     val chatViewModel: ChatViewModel = viewModel()
     val settingsViewModel: SettingsViewModel = viewModel(
         factory = SettingsViewModelFactory(
-            settingsRepository, ttsManager, com.example.mark.assistant.MarkAssistant.memory(context)
+            settingsRepository, ttsManager,
+            memory = com.example.mark.assistant.MarkAssistant.memory(context),
+            laptop = com.example.mark.tools.LaptopTool(context)
         )
     )
 

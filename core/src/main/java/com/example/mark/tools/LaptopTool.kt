@@ -8,12 +8,11 @@ import com.example.mark.network.FunctionDef
 import com.example.mark.network.Parameters
 import com.example.mark.network.Property
 import com.example.mark.router.IntentType
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.example.mark.network.LanHttp
+import com.example.mark.network.WakeOnLan
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Talks to the Mark laptop agent (mark_agent.py) over the local network.
@@ -37,13 +36,13 @@ class LaptopTool(private val context: Context) : Tool {
     override val definition = FunctionDef(
         name = name,
         description = "Control the user's Windows laptop over the local network: " +
-            "lock, sleep, shutdown, restart, open or close apps, media playback, " +
-            "volume, brightness, screenshot, and status.",
+            "wake it up, lock, sleep, shutdown, restart, open or close apps, media playback, " +
+            "brightness, search, typing, screenshot, and status.",
         parameters = Parameters(
             properties = mapOf(
                 "action" to Property(
                     "string",
-                    "One of: status, lock, sleep, screen_off, shutdown, restart, logoff, " +
+                    "One of: status, wake, lock, sleep, screen_off, shutdown, restart, logoff, " +
                         "cancel_shutdown, open, close, switch, media, brightness, " +
                         "dark_mode, wifi, folder, browser, type, clipboard_get, clipboard_set, " +
                         "screenshot, screen_record, foreground, gradle"
@@ -63,14 +62,18 @@ class LaptopTool(private val context: Context) : Tool {
 
     /** Ending the user's session on the laptop needs a spoken yes. */
     override fun needsConfirmation(request: ToolRequest): Boolean =
-        request.string("action")?.lowercase() in DESTRUCTIVE_ACTIONS
+        request.string("action")?.lowercase() in LaptopCommands.DESTRUCTIVE
+
+    data class Config(val host: String, val token: String, val mac: String)
 
     private companion object {
-        val DESTRUCTIVE_ACTIONS = setOf("shutdown", "restart", "logoff")
         const val PREFS = "laptop_agent"
         const val KEY_HOST = "host"
         const val KEY_TOKEN = "token"
+        const val KEY_MAC = "mac"
         const val PORT = 8765
+        const val WAKE_WAIT_MS = 30_000L
+        const val WAKE_POLL_MS = 3_000L
 
         // Short on purpose. If the laptop is asleep we want to say so quickly,
         // not leave the user staring at the orb.
@@ -83,11 +86,21 @@ class LaptopTool(private val context: Context) : Tool {
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     }
 
-    /** Set once from the phone's settings screen. */
-    fun configure(host: String, token: String) {
+    /** Set from the phone's settings screen. */
+    fun configure(host: String, token: String, mac: String = config().mac) {
         android.util.Log.d("MarkLaptop", "configured host=$host")
-        prefs.edit().putString(KEY_HOST, host.trim()).putString(KEY_TOKEN, token.trim()).apply()
+        prefs.edit()
+            .putString(KEY_HOST, host.trim())
+            .putString(KEY_TOKEN, token.trim())
+            .putString(KEY_MAC, mac.trim())
+            .apply()
     }
+
+    fun config() = Config(
+        host = prefs.getString(KEY_HOST, null).orEmpty(),
+        token = prefs.getString(KEY_TOKEN, null).orEmpty(),
+        mac = prefs.getString(KEY_MAC, null).orEmpty()
+    )
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         val host = prefs.getString(KEY_HOST, null)?.takeIf { it.isNotBlank() }
@@ -102,10 +115,13 @@ class LaptopTool(private val context: Context) : Tool {
         }
 
         val action = request.string("action") ?: "status"
+        if (action == "wake") return wake(host, token)
 
         // The resolver's laptop rule has two alternatives (laptop-first and
         // app-first word order), so the app name lands in whichever group matched.
         val app = request.string("app") ?: request.string("app2")
+        // The router recognises "laptop pe google karo X" but captures no X.
+        val payload = if (action in LaptopCommands.NEEDS_PAYLOAD) LaptopCommands.payloadFrom(request.rawInput) else null
 
         val body = JSONObject().apply {
             put("action", if (action == "status") "status" else action)
@@ -115,14 +131,22 @@ class LaptopTool(private val context: Context) : Tool {
             request.string("level")?.let { put("level", it) }
             request.string("amount")?.let { put("amount", it) }
             request.string("state")?.let { put("state", it) }
-            request.string("folder")?.let { put("folder", it) }
-            request.string("text")?.let { put("text", it) }
-            request.string("query")?.let { put("query", it) }
+            (request.string("folder") ?: request.string("folder2"))?.let { put("folder", it) }
+            request.string("site")?.let { put("site", it) }
+            (request.string("text") ?: payload.takeIf { action != "browser" })?.let { put("text", it) }
+            (request.string("query") ?: payload.takeIf { action == "browser" })?.let { put("query", it) }
             request.string("task")?.let { put("task", it) }
+            request.rawInput?.let { put("raw_input", it) }
         }
 
-        val result = withTimeoutOrNull(OVERALL_TIMEOUT_MS) {
-            post("http://$host:$PORT/command", token, body.toString())
+        val result = try {
+            withTimeoutOrNull(OVERALL_TIMEOUT_MS) { post(host, token, body.toString()) }
+        } catch (e: IllegalArgumentException) {
+            return ToolResult.Failure(
+                "The laptop address in settings isn't on your home network, sir.", reason = "not_lan"
+            )
+        } catch (e: java.io.IOException) {
+            null
         }
 
         return when {
@@ -154,24 +178,36 @@ class LaptopTool(private val context: Context) : Tool {
         .replace("vs code", "vscode")
         .replace("android studio", "androidstudio")
 
-    private suspend fun post(url: String, token: String, json: String): Pair<Int, String> =
-        withContext(Dispatchers.IO) {
-            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = CONNECT_TIMEOUT_MS
-                readTimeout = READ_TIMEOUT_MS
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("X-Mark-Token", token)
-            }
-            try {
-                conn.outputStream.use { it.write(json.toByteArray()) }
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                code to text
-            } finally {
-                conn.disconnect()
-            }
+    private suspend fun post(host: String, token: String, json: String): Pair<Int, String> =
+        LanHttp.post(
+            host = host, port = PORT, path = "/command", json = json,
+            headers = mapOf("X-Mark-Token" to token),
+            connectTimeoutMs = CONNECT_TIMEOUT_MS, readTimeoutMs = READ_TIMEOUT_MS
+        )
+
+    /** Wake-on-LAN, then wait for the agent to answer so Mark can say it is up. */
+    private suspend fun wake(host: String, token: String): ToolResult {
+        val mac = WakeOnLan.parseMac(config().mac)
+            ?: return ToolResult.Failure(
+                "To wake the laptop I need its MAC address in Mark's settings, sir.", reason = "no_mac"
+            )
+        if (runCatching { WakeOnLan.send(mac) }.isFailure) {
+            return ToolResult.Failure("I couldn't send the wake signal, sir.", reason = "network_error")
         }
+        val status = JSONObject().put("action", "status").toString()
+        val awake = withTimeoutOrNull(WAKE_WAIT_MS) {
+            var answered = false
+            while (!answered) {
+                answered = runCatching { post(host, token, status) }.getOrNull()?.first == 200
+                if (!answered) delay(WAKE_POLL_MS)
+            }
+            true
+        } ?: false
+        return if (awake) ToolResult.Success("The laptop is awake, sir.", mapOf("action" to "wake"))
+        else ToolResult.Partial(
+            "Wake signal sent, but the laptop hasn't answered yet. Wake-on-LAN usually needs a wired " +
+                "connection and has to be enabled on the laptop.",
+            reason = "no_answer"
+        )
+    }
 }

@@ -73,13 +73,18 @@ class RegexIntentResolver {
         // "band kar" deliberately maps to LOCK, not shutdown: it is ambiguous in
         // Hinglish and lock is the harmless reading. Shutdown needs an explicit word.
         private const val LAPTOP     = "laptop|lapy|pc|computer|macbook|desktop"
-        private const val L_LOCK     = "lock|band kar|bandh kar"
+        // "karo" forms too: "band kar\b" does not match "band karo", so
+        // "laptop band karo" fell through to MEDIA_CONTROL and paused music.
+        private const val L_LOCK     = "lock|band kar|bandh kar|band karo|bandh karo"
         private const val L_SLEEP    = "sleep|sula|sulaa|hibernate|so jaye"
         private const val L_SCROFF   = "screen off|screen band|display band|monitor off|screen bandh"
         private const val L_SHUTDOWN = "shutdown|shut down|power off|turn off|switch off|poweroff"
         private const val L_RESTART  = "restart|reboot|dobara chalu|dubara start"
         private const val L_LOGOFF   = "log off|logoff|logout|log out|sign out"
         private const val L_CANCEL   = "cancel|abort|rehne de|stop shutdown"
+        // Wake-on-LAN. Generic verbs, so the rule sits below every specific laptop
+        // action: "laptop pe chrome start karo" still opens Chrome.
+        private const val L_WAKE     = "wake|wake up|jagao|jaga|uthao|on kar|on karo|chalu kar|chalu karo|start kar|start karo|turn on|switch on|power on"
         private const val L_CLOSE    = "close|band|quit|kill|exit|khatam"
         private const val L_SWITCH   = "switch|alt tab|change window|window badal|next window"
         private const val L_FOLDER   = "downloads|desktop|documents|projects|mark folder|download folder"
@@ -228,7 +233,7 @@ class RegexIntentResolver {
             // "restart" -> "start" (then OPEN_APP fired with app_name="kar")
             // "code"    -> "cold"  (then the open rule stopped matching).
             // Any new constant added above has to be added to this list too.
-            LAPTOP, L_LOCK, L_SLEEP, L_SCROFF, L_SHUTDOWN, L_RESTART, L_LOGOFF, L_CANCEL,
+            LAPTOP, L_LOCK, L_SLEEP, L_SCROFF, L_SHUTDOWN, L_RESTART, L_LOGOFF, L_CANCEL, L_WAKE,
             L_CLOSE, L_SWITCH, L_FOLDER, L_SHOT, L_RECORD, L_BRIGHT, L_DARK, L_WIFI,
             L_SEARCH, L_YT, L_GRADLE, L_CLIPGET, L_CLIPSET, L_TYPE, L_FG, L_STATUS, L_APP
         )
@@ -737,6 +742,9 @@ class RegexIntentResolver {
         Rule(IntentType.LAPTOP_CONTROL,
             Regex("""\b(?:$LAPTOP)\b.*\b(?:$L_LOCK)\b|\b(?:$L_LOCK)\b.*\b(?:$LAPTOP)\b"""),
             fixedParams = mapOf("action" to "lock"), priority = 24),
+        Rule(IntentType.LAPTOP_CONTROL,
+            Regex("""\b(?:$LAPTOP)\b.*\b(?:$L_WAKE)\b|\b(?:$L_WAKE)\b.*\b(?:$LAPTOP)\b"""),
+            fixedParams = mapOf("action" to "wake"), priority = 20),
         // Status needs a status word. The old version also matched a BARE
         // "laptop", which meant a half-heard command — speech recognition emits
         // "laptop", then "laptop lock", then "laptop lock kar" — could fire a
