@@ -1,7 +1,19 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
 }
+
+// API keys stay out of source control: read from local.properties (gitignored),
+// falling back to environment variables for CI. Missing keys build as "".
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun secret(name: String): String =
+    (localProperties.getProperty(name) ?: System.getenv(name) ?: "").trim()
 
 android {
     namespace = "com.example.mark.core"
@@ -9,6 +21,14 @@ android {
 
     defaultConfig {
         minSdk = 26
+        consumerProguardFiles("consumer-rules.pro")
+
+        buildConfigField("String", "GROQ_API_KEY", "\"${secret("GROQ_API_KEY")}\"")
+        buildConfigField("String", "WEATHER_API_KEY", "\"${secret("WEATHER_API_KEY")}\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

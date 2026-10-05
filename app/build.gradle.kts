@@ -22,8 +22,8 @@ android {
     buildTypes {
         release {
             // Same story as :wear — this was false, so "release" was still an
-            // unoptimised build. Copy wear/proguard-rules.pro to app/ as well:
-            // the Gson/transport/enum keep rules are identical for both modules.
+            // unoptimised build. The Gson/transport/enum keep rules come from
+            // core/consumer-rules.pro, shared with :wear.
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.getByName("debug")

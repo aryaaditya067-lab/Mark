@@ -118,3 +118,30 @@ The routing pipeline consists of:
 -   Native support for English and Hinglish voice commands.
 -   Context-aware conversational responses.
 -   Configurable assistant personality and language behavior.
+
+------------------------------------------------------------------------
+
+## 6. Setup
+
+API keys are read at build time from `local.properties` in the project
+root (already gitignored), or from environment variables of the same
+name. Never put them in source files.
+
+``` properties
+GROQ_API_KEY=your-groq-key
+WEATHER_API_KEY=your-openweathermap-key
+```
+
+Without `GROQ_API_KEY` the offline router still works; online requests
+report that the key is missing. Without `WEATHER_API_KEY` weather lookups
+fail.
+
+Firebase is configured by `app/google-services.json` (phone) and
+`wear/google-services.json` (watch). To use your own Firebase project,
+replace both with files from its console.
+
+### Running tests
+
+``` bash
+./gradlew :core:testDebugUnitTest
+```

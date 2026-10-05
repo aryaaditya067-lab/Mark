@@ -60,6 +60,10 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     private var lastBatteryLevel = -1
     private var batteryHysteresis = false
 
+    // Registered on the application context, so it outlives this ViewModel
+    // unless unregistered in onCleared(). Declared above init, which assigns it.
+    private var batteryReceiver: android.content.BroadcastReceiver? = null
+
     private companion object {
         // Word reveal cadence for the on-screen reply. 380ms per word made the
         // text crawl and fall far behind the speech; ~90ms reads as continuous
@@ -172,14 +176,14 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
             addAction(android.content.Intent.ACTION_BATTERY_CHANGED)
             addAction(android.content.Intent.ACTION_POWER_CONNECTED)
         }
-        app.registerReceiver(object : android.content.BroadcastReceiver() {
+        val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
                 when (intent?.action) {
                     android.content.Intent.ACTION_BATTERY_CHANGED -> {
                         val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
                         val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
-                        val batteryPct = (level * 100 / scale.toFloat()).toInt()
-                        handleBatteryChange(batteryPct)
+                        if (level < 0 || scale <= 0) return
+                        handleBatteryChange(level * 100 / scale)
                     }
                     android.content.Intent.ACTION_POWER_CONNECTED -> {
                         val vibrator = app.getSystemService(Vibrator::class.java)
@@ -187,7 +191,9 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             }
-        }, filter)
+        }
+        app.registerReceiver(receiver, filter)
+        batteryReceiver = receiver
     }
 
     private fun handleBatteryChange(pct: Int) {
@@ -237,7 +243,9 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
         val intent = app.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
         val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
-        return (level * 100 / scale.toFloat()).toInt()
+        // Unknown level reads as full, so the brief never invents a low-battery warning.
+        if (level < 0 || scale <= 0) return 100
+        return level * 100 / scale
     }
 
     // NOTE: the old ensureVoiceSet() forced tts.setVoice("en-us-x-iol-local") before
@@ -422,6 +430,8 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     fun errorShown() { _uiState.update { it.copy(errorMessage = null) } }
 
     override fun onCleared() {
+        batteryReceiver?.let { runCatching { app.unregisterReceiver(it) } }
+        batteryReceiver = null
         speech.stopListening()
         tts.stop()
         super.onCleared()

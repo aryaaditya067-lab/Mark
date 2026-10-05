@@ -1,6 +1,7 @@
 package com.example.mark.repository
 
 import com.example.mark.model.Message
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -42,18 +43,8 @@ class ChatHistoryRepository(
                             close(error)
                             return@addSnapshotListener
                         }
-                        val list = snapshot?.documents?.mapNotNull { doc ->
-                            Message(
-                                id = doc.id,
-                                role = doc.getString("role") ?: return@mapNotNull null,
-                                content = doc.getString("content"),
-                                toolCallsJson = doc.getString("toolCalls"),
-                                toolCallId = doc.getString("toolCallId"),
-                                name = doc.getString("name"),
-                                isToolReply = doc.getBoolean("isToolReply") ?: false,
-                                createdAt = doc.getLong("createdAt") ?: 0L
-                            )
-                        }?.reversed() ?: emptyList() // back to oldest-first for the UI
+                        val list = snapshot?.documents?.mapNotNull { it.toMessage() }
+                            ?.reversed() ?: emptyList() // back to oldest-first for the UI
                         trySend(list)
                     }
                 awaitClose { registration.remove() }
@@ -72,31 +63,12 @@ class ChatHistoryRepository(
             .get()
             .await()
 
-        return snapshot.documents.mapNotNull { doc ->
-            Message(
-                id = doc.id,
-                role = doc.getString("role") ?: return@mapNotNull null,
-                content = doc.getString("content"),
-                toolCallsJson = doc.getString("toolCalls"),
-                toolCallId = doc.getString("toolCallId"),
-                name = doc.getString("name"),
-                isToolReply = doc.getBoolean("isToolReply") ?: false,
-                createdAt = doc.getLong("createdAt") ?: 0L
-            )
-        }.reversed() // return in chronological order
+        return snapshot.documents.mapNotNull { it.toMessage() }
+            .reversed() // return in chronological order
     }
 
     suspend fun append(message: Message) {
-        val data = hashMapOf<String, Any?>(
-            "role" to message.role,
-            "content" to message.content,
-            "toolCalls" to message.toolCallsJson,
-            "toolCallId" to message.toolCallId,
-            "name" to message.name,
-            "isToolReply" to message.isToolReply,
-            "createdAt" to message.createdAt
-        )
-        collection().document(message.id).set(data).await()
+        collection().document(message.id).set(message.toFirestore()).await()
     }
 
     /**
@@ -109,27 +81,45 @@ class ChatHistoryRepository(
         val collection = collection()
         val batch = db.batch()
         messages.forEach { message ->
-            val data = hashMapOf<String, Any?>(
-                "role" to message.role,
-                "content" to message.content,
-                "toolCalls" to message.toolCallsJson,
-                "toolCallId" to message.toolCallId,
-                "name" to message.name,
-                "createdAt" to message.createdAt
-            )
-            batch.set(collection.document(message.id), data)
+            batch.set(collection.document(message.id), message.toFirestore())
         }
         batch.commit().await()
     }
 
     suspend fun clear() {
         val snapshot = collection().get().await()
-        val batch = db.batch()
-        snapshot.documents.forEach { batch.delete(it.reference) }
-        batch.commit().await()
+        // A Firestore batch holds at most 500 writes; a long history needs several.
+        snapshot.documents.chunked(MAX_BATCH_WRITES).forEach { chunk ->
+            val batch = db.batch()
+            chunk.forEach { batch.delete(it.reference) }
+            batch.commit().await()
+        }
     }
 
+    private fun DocumentSnapshot.toMessage(): Message? = Message(
+        id = id,
+        role = getString("role") ?: return null,
+        content = getString("content"),
+        toolCallsJson = getString("toolCalls"),
+        toolCallId = getString("toolCallId"),
+        name = getString("name"),
+        isToolReply = getBoolean("isToolReply") ?: false,
+        createdAt = getLong("createdAt") ?: 0L
+    )
+
+    private fun Message.toFirestore(): Map<String, Any?> = hashMapOf(
+        "role" to role,
+        "content" to content,
+        "toolCalls" to toolCallsJson,
+        "toolCallId" to toolCallId,
+        "name" to name,
+        "isToolReply" to isToolReply,
+        "createdAt" to createdAt
+    )
+
     companion object {
+        private const val MAX_BATCH_WRITES = 500
+
         val instance: ChatHistoryRepository by lazy { ChatHistoryRepository() }
     }
 }
