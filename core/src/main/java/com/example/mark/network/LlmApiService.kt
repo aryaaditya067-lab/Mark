@@ -7,12 +7,12 @@ import retrofit2.http.POST
 import retrofit2.http.Streaming
 
 /**
- * Retrofit service interface for the Groq API.
+ * Retrofit service interface for the OpenAI-compatible chat API (Xiaomi MiMo).
  */
-interface GroqApiService {
+interface LlmApiService {
 
     /**
-     * Sends a chat completion request to the Groq API.
+     * Sends a chat completion request to the LLM.
      *
      * @param authHeader The Bearer token for authentication.
      * @param request The chat completion request body.
@@ -21,13 +21,13 @@ interface GroqApiService {
     @POST("chat/completions")
     suspend fun chatCompletion(
         @Header("Authorization") authHeader: String,
-        @Body request: GroqRequest
-    ): GroqResponse
+        @Body request: LlmRequest
+    ): LlmResponse
 
     @Streaming
     @POST("chat/completions")
     suspend fun chatCompletionStream(
         @Header("Authorization") authHeader: String,
-        @Body request: GroqRequest
+        @Body request: LlmRequest
     ): ResponseBody
 }

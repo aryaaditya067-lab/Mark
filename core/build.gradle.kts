@@ -6,13 +6,13 @@ plugins {
 }
 
 // API keys stay out of source control: read from local.properties (gitignored),
-// falling back to environment variables for CI. Missing keys build as "".
+// falling back to environment variables for CI. Missing values build as "".
 val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
-fun secret(name: String): String =
+fun localConfig(name: String): String =
     (localProperties.getProperty(name) ?: System.getenv(name) ?: "").trim()
 
 android {
@@ -23,8 +23,9 @@ android {
         minSdk = 26
         consumerProguardFiles("consumer-rules.pro")
 
-        buildConfigField("String", "GROQ_API_KEY", "\"${secret("GROQ_API_KEY")}\"")
-        buildConfigField("String", "WEATHER_API_KEY", "\"${secret("WEATHER_API_KEY")}\"")
+        buildConfigField("String", "MIMO_API_KEY", "\"${localConfig("MIMO_API_KEY")}\"")
+        buildConfigField("String", "MIMO_MODEL", "\"${localConfig("MIMO_MODEL").ifEmpty { "mimo-v2.6-flash" }}\"")
+        buildConfigField("String", "WEATHER_API_KEY", "\"${localConfig("WEATHER_API_KEY")}\"")
     }
 
     buildFeatures {
@@ -62,7 +63,7 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
 
-    // Network — Groq. Used only inside core's network package.
+    // Network — LLM (MiMo) and weather. Used only inside core's network package.
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp)

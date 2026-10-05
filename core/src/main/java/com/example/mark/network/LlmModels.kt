@@ -2,9 +2,9 @@ package com.example.mark.network
 
 import com.google.gson.annotations.SerializedName
 
-/** Groq (OpenAI-compatible) request/response DTOs. */
+/** OpenAI-compatible chat request/response DTOs (Xiaomi MiMo). */
 
-data class GroqMessage(
+data class LlmMessage(
     val role: String,                       // "system" | "user" | "assistant" | "tool"
     val content: String? = null,
     @SerializedName("tool_calls") val toolCalls: List<ToolCall>? = null,
@@ -12,25 +12,34 @@ data class GroqMessage(
     val name: String? = null                // tool name, only for role="tool"
 )
 
-data class GroqRequest(
+data class LlmRequest(
     val model: String,
-    val messages: List<GroqMessage>,
+    val messages: List<LlmMessage>,
     val temperature: Double = 0.7,
-    @SerializedName("max_tokens") val maxTokens: Int = 400,
+    @SerializedName("max_completion_tokens") val maxTokens: Int = 400,
     val tools: List<Tool>? = null,
     @SerializedName("tool_choice") val toolChoice: String? = null,
-    val stream: Boolean = false
+    val stream: Boolean = false,
+    // MiMo reasons before answering unless told not to. For a voice assistant
+    // that is seconds of silence, so it is off by default.
+    val thinking: Thinking? = Thinking.DISABLED
 )
 
-data class GroqResponse(
+data class Thinking(val type: String) {
+    companion object {
+        val DISABLED = Thinking("disabled")
+    }
+}
+
+data class LlmResponse(
     val id: String?,
     val model: String?,
-    val choices: List<GroqChoice>?
+    val choices: List<LlmChoice>?
 )
 
-data class GroqChoice(
+data class LlmChoice(
     val index: Int?,
-    val message: GroqMessage?,
+    val message: LlmMessage?,
     @SerializedName("finish_reason") val finishReason: String?
 )
 
@@ -71,16 +80,16 @@ data class Property(
 
 // --- Streaming ---
 
-data class GroqStreamResponse(
-    val choices: List<GroqStreamChoice>
+data class LlmStreamResponse(
+    val choices: List<LlmStreamChoice>
 )
 
-data class GroqStreamChoice(
-    val delta: GroqStreamDelta,
+data class LlmStreamChoice(
+    val delta: LlmStreamDelta,
     @SerializedName("finish_reason") val finishReason: String?
 )
 
-data class GroqStreamDelta(
+data class LlmStreamDelta(
     val role: String?,
     val content: String?,
     @SerializedName("tool_calls") val toolCalls: List<ToolCallDelta>?

@@ -16,7 +16,7 @@ import kotlinx.coroutines.tasks.await
  * Chat history in Firestore.
  * Path: users/{uid}/chat/{messageId}
  *
- * Stores the full Groq conversation, including tool calls and tool results,
+ * Stores the full LLM conversation, including tool calls and tool results,
  * so the model never re-fires a tool it has already run.
  */
 class ChatHistoryRepository(
@@ -53,7 +53,7 @@ class ChatHistoryRepository(
 
     /**
      * One-time read of the most recent messages.
-     * Used when building a request for Groq to provide context without downloading
+     * Used when building a request for the LLM to provide context without downloading
      * the entire history.
      */
     suspend fun recent(limit: Int): List<Message> {

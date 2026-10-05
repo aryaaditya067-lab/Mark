@@ -24,7 +24,7 @@ import java.util.UUID
 class AssistantController(
     private val toolManager: ToolManager,
     private val router: IntentRouter = IntentRouter(),
-    private val api: GroqApiService = RetrofitClient.groqApi,
+    private val api: LlmApiService = RetrofitClient.llmApi,
     private val historyProvider: () -> ChatHistoryRepository? = { ChatHistoryRepository.instance },
     private val isWatch: Boolean = false,
     private val transport: CommandTransport? = null,
@@ -160,9 +160,9 @@ class AssistantController(
         }
 
         // Online Path
-        var groqReply = ""
-        handleOnlineStream(userText).collect { if (it is AssistantEvent.Text) groqReply += it.content }
-        return if (groqReply.isNotBlank()) Triple(groqReply, ReplyMode.SPEAK, true)
+        var llmReply = ""
+        handleOnlineStream(userText).collect { if (it is AssistantEvent.Text) llmReply += it.content }
+        return if (llmReply.isNotBlank()) Triple(llmReply, ReplyMode.SPEAK, true)
         else Triple(Persona.notUnderstood(), ReplyMode.SPEAK, false)
     }
 
@@ -339,15 +339,15 @@ class AssistantController(
 
     private suspend fun handleOnlineStream(userText: String): Flow<AssistantEvent> = flow {
         // Read context BEFORE storing this turn's user message — otherwise the
-        // window already contains it and Groq sees the question twice.
+        // window already contains it and the LLM sees the question twice.
         val past = if (isWatch) watchSessionHistory.toList()
         else runCatching { historyProvider()?.recent(Constants.MAX_HISTORY_MESSAGES) }.getOrNull() ?: emptyList()
         val stored = HistoryWindow.select(past, Constants.MAX_HISTORY_MESSAGES)
         persist(Message(role = "user", content = userText))
         val messages = buildList {
-            add(GroqMessage(role = "system", content = PromptBuilder.systemPrompt()))
-            addAll(stored.map { it.toGroqMessage() })
-            add(GroqMessage(role = "user", content = userText))
+            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt()))
+            addAll(stored.map { it.toLlmMessage() })
+            add(LlmMessage(role = "user", content = userText))
         }.toMutableList()
 
         var fullReply = ""
@@ -377,7 +377,7 @@ class AssistantController(
             val toolResults = mutableListOf<Message>()
             for (call in calls) {
                 val result = toolManager.execute(call.function.name, call.function.arguments, userText)
-                val toolMsg = GroqMessage(role = "tool", toolCallId = call.id, name = call.function.name, content = result.text)
+                val toolMsg = LlmMessage(role = "tool", toolCallId = call.id, name = call.function.name, content = result.text)
                 messages.add(toolMsg)
                 toolResults.add(Message(role = "tool", content = result.text, toolCallId = call.id, name = call.function.name))
             }
@@ -388,8 +388,8 @@ class AssistantController(
         }
     }
 
-    private suspend fun askStream(messages: List<GroqMessage>): Flow<GroqStreamResponse> = flow {
-        val responseBody = api.chatCompletionStream(authHeader = groqAuthHeader(), request = GroqRequest(model = Constants.GROQ_MODEL, messages = messages, tools = toolManager.definitions, stream = true))
+    private suspend fun askStream(messages: List<LlmMessage>): Flow<LlmStreamResponse> = flow {
+        val responseBody = api.chatCompletionStream(authHeader = llmAuthHeader(), request = LlmRequest(model = Constants.MIMO_MODEL, messages = messages, tools = toolManager.definitions, stream = true))
         responseBody.byteStream().bufferedReader().use { reader ->
             while (true) {
                 val line = reader.readLine() ?: break
@@ -398,22 +398,22 @@ class AssistantController(
                     if (data == "[DONE]") break
                     // Parse inside the try, emit outside it: emit() rethrows downstream
                     // failures and cancellation, which must not be swallowed here.
-                    val chunk = try { gson.fromJson(data, GroqStreamResponse::class.java) } catch (e: Exception) { null }
+                    val chunk = try { gson.fromJson(data, LlmStreamResponse::class.java) } catch (e: Exception) { null }
                     if (chunk != null) emit(chunk)
                 }
             }
         }
     }
 
-    private fun groqAuthHeader(): String {
-        check(Constants.GROQ_API_KEY.isNotBlank()) {
-            "Groq API key is not set. Add GROQ_API_KEY to local.properties and rebuild."
+    private fun llmAuthHeader(): String {
+        check(Constants.MIMO_API_KEY.isNotBlank()) {
+            "MiMo API key is not set. Add MIMO_API_KEY to local.properties and rebuild."
         }
-        return "Bearer ${Constants.GROQ_API_KEY}"
+        return "Bearer ${Constants.MIMO_API_KEY}"
     }
 
-    private suspend fun ask(messages: List<GroqMessage>): GroqMessage {
-        val response = api.chatCompletion(authHeader = groqAuthHeader(), request = GroqRequest(model = Constants.GROQ_MODEL, messages = messages, tools = toolManager.definitions))
+    private suspend fun ask(messages: List<LlmMessage>): LlmMessage {
+        val response = api.chatCompletion(authHeader = llmAuthHeader(), request = LlmRequest(model = Constants.MIMO_MODEL, messages = messages, tools = toolManager.definitions))
         return response.choices?.firstOrNull()?.message ?: error("Empty response")
     }
 
@@ -421,12 +421,12 @@ class AssistantController(
     private suspend fun persist(messages: List<Message>) {
         if (isWatch) {
             watchSessionHistory.addAll(messages)
-            // Only the tail is ever sent to Groq; a long session must not grow forever.
+            // Only the tail is ever sent to the LLM; a long session must not grow forever.
             val overflow = watchSessionHistory.size - WATCH_HISTORY_CAP
             if (overflow > 0) watchSessionHistory.subList(0, overflow).clear()
         } else runCatching { historyProvider()?.appendAll(messages) }
     }
-    private fun Message.toGroqMessage() = GroqMessage(role = role, content = content, toolCalls = toolCallsJson?.let { gson.fromJson(it, toolCallListType) }, toolCallId = toolCallId, name = name)
+    private fun Message.toLlmMessage() = LlmMessage(role = role, content = content, toolCalls = toolCallsJson?.let { gson.fromJson(it, toolCallListType) }, toolCallId = toolCallId, name = name)
 
     suspend fun clearConversation() {
         stop()

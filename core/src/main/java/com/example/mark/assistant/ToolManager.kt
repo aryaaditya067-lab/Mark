@@ -6,7 +6,7 @@ import com.google.gson.JsonObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import com.example.mark.network.Tool as GroqToolSchema
+import com.example.mark.network.Tool as LlmToolSchema
 
 /**
  * Dispatches to tools. Knows nothing about any individual tool — the registry
@@ -16,13 +16,13 @@ class ToolManager(private val registry: ToolRegistry) {
 
     private val gson = Gson()
 
-    /** Schemas sent to Groq with every request. */
-    val definitions: List<GroqToolSchema> =
-        registry.all.map { GroqToolSchema(function = it.definition) }
+    /** Schemas sent to the LLM with every request. */
+    val definitions: List<LlmToolSchema> =
+        registry.all.map { LlmToolSchema(function = it.definition) }
 
     fun supports(intent: IntentType): Boolean = registry.supports(intent)
 
-    /** Groq path. [arguments] is the raw JSON string Groq produced. */
+    /** LLM path. [arguments] is the raw JSON string the model produced. */
     suspend fun execute(name: String, arguments: String, rawInput: String? = null): ToolResult {
         val tool = registry[name]
             ?: return ToolResult.Failure("Unknown tool: $name", reason = "not_registered")
@@ -46,7 +46,7 @@ class ToolManager(private val registry: ToolRegistry) {
 
     /**
      * Tools are contracted not to throw, but a bug in one must not kill the
-     * whole turn — Groq can work with "this failed", not with a crash.
+     * whole turn — the LLM can work with "this failed", not with a crash.
      * Cancellation is the exception: it is how stop() and barge-in end a turn,
      * so it must propagate rather than become a "failed" reply.
      */

@@ -144,7 +144,7 @@ class TextToSpeechManager(context: Context) {
 
     /**
      * Appends text to a buffer and speaks it as soon as a full sentence is ready.
-     * Used for streaming Groq responses.
+     * Used for streaming LLM responses.
      */
     fun speakStream(chunk: String) {
         if (!ready) return

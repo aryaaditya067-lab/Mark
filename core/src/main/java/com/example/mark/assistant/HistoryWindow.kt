@@ -4,12 +4,12 @@ import com.example.mark.model.Message
 import com.google.gson.JsonParser
 
 /**
- * Picks the slice of past conversation sent to Groq as context.
+ * Picks the slice of past conversation sent to the LLM as context.
  *
  * A plain `takeLast(n)` can cut a tool exchange in half: the window may open
  * on a "tool" message whose assistant tool_calls message fell outside it, or
  * end on an assistant tool_calls message whose results were never written
- * (the turn died mid-way). Groq rejects both with a 400, so every request
+ * (the turn died mid-way). The API rejects both with a 400, so every request
  * after that fails until the history scrolls past the damage.
  */
 internal object HistoryWindow {

@@ -3,7 +3,7 @@ package com.example.mark.model
 import java.util.UUID
 
 /**
- * One entry in the conversation. Mirrors the Groq message shape so it can be
+ * One entry in the conversation. Mirrors the LLM message shape so it can be
  * sent back to the API as-is, while also driving the chat UI.
  *
  * role "tool" messages are never shown in the UI.
