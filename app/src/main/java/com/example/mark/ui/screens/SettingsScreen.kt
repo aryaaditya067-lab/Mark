@@ -49,7 +49,15 @@ fun SettingsScreen(
     var showClearDialog by remember { mutableStateOf(false) }
     var showVoiceDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val voices = remember { settingsViewModel.ttsManager.availableVoices() }
+    // The engine may still be starting when Settings first opens; retry briefly.
+    var voices by remember { mutableStateOf(settingsViewModel.ttsManager.availableVoices(includeOnline = true)) }
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            if (voices.isNotEmpty()) return@LaunchedEffect
+            kotlinx.coroutines.delay(1_000)
+            voices = settingsViewModel.ttsManager.availableVoices(includeOnline = true)
+        }
+    }
 
     val context = LocalContext.current
     val notificationManager = remember { context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }

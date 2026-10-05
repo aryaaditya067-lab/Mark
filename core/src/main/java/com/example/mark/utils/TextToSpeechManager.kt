@@ -27,6 +27,9 @@ class TextToSpeechManager(context: Context) {
     private var pending: String? = null
     private var desiredVoiceName: String? = null
 
+    /** The offline voice picked at start-up; the fallback when an online voice can't be reached. */
+    @Volatile private var localVoice: Voice? = null
+
     private val _isSpeaking = MutableStateFlow(false)
 
     /**
@@ -115,6 +118,7 @@ class TextToSpeechManager(context: Context) {
                         .firstOrNull()
                 }
 
+                localVoice = selected
                 selected?.let {
                     tts?.voice = it
                     android.util.Log.d("MarkVoice", "SELECTED ${it.name}")
@@ -145,10 +149,14 @@ class TextToSpeechManager(context: Context) {
         }
     }
 
-    /** Local voices only — network voices stall on the watch's Bluetooth link. */
-    fun availableVoices(): List<Voice> =
+    /**
+     * English voices for the picker. Local ones always; online ("network")
+     * voices only when [includeOnline] — they sound more natural on the phone,
+     * but stall on the watch's Bluetooth link, so the watch never offers them.
+     */
+    fun availableVoices(includeOnline: Boolean = false): List<Voice> =
         tts?.voices
-            ?.filter { it.locale.language == "en" && it.name.endsWith("-local") }
+            ?.filter { it.locale.language == "en" && (it.name.endsWith("-local") || (includeOnline && it.name.endsWith("-network"))) }
             ?.sortedBy { it.name }
             .orEmpty()
 
@@ -160,6 +168,28 @@ class TextToSpeechManager(context: Context) {
 
     private fun applyVoice(name: String) {
         tts?.voices?.find { it.name == name }?.let { tts?.voice = it }
+    }
+
+    /**
+     * An online voice with no network would go silent or stall, so speak with
+     * the offline voice until the network is back, then return to the choice.
+     */
+    private fun ensureUsableVoice() {
+        val engine = tts ?: return
+        val wanted = desiredVoiceName?.let { name -> engine.voices?.find { it.name == name } }
+        val target = when {
+            wanted == null -> return
+            !wanted.isNetworkConnectionRequired -> wanted
+            isOnline() -> wanted
+            else -> localVoice ?: return
+        }
+        if (engine.voice?.name != target.name) engine.voice = target
+    }
+
+    private fun isOnline(): Boolean {
+        val cm = appContext.getSystemService(android.net.ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     /**
@@ -244,6 +274,7 @@ class TextToSpeechManager(context: Context) {
 
     private fun enqueue(text: String, mode: Int) {
         ensureAudible()
+        ensureUsableVoice()
         if (!holdingFocus) {
             holdingFocus = true
             audioManager?.requestAudioFocus(focusRequest)
