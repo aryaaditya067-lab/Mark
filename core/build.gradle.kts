@@ -26,6 +26,7 @@ android {
         buildConfigField("String", "MIMO_API_KEY", "\"${localConfig("MIMO_API_KEY")}\"")
         buildConfigField("String", "MIMO_MODEL", "\"${localConfig("MIMO_MODEL").ifEmpty { "mimo-v2.6-flash" }}\"")
         buildConfigField("String", "WEATHER_API_KEY", "\"${localConfig("WEATHER_API_KEY")}\"")
+        buildConfigField("String", "TAVILY_API_KEY", "\"${localConfig("TAVILY_API_KEY")}\"")
     }
 
     buildFeatures {

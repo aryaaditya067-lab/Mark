@@ -37,6 +37,15 @@ object RetrofitClient {
             .create(LlmApiService::class.java)
     }
 
+    val tavilyApi: TavilyApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://api.tavily.com/")
+            .client(okHttp)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(TavilyApiService::class.java)
+    }
+
     val weatherApi: WeatherApiService by lazy {
         Retrofit.Builder()
             .baseUrl(Constants.WEATHER_BASE_URL)

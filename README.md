@@ -132,6 +132,8 @@ MIMO_API_KEY=your-mimo-key
 WEATHER_API_KEY=your-openweathermap-key
 # Optional, defaults to mimo-v2.6-flash (fastest replies for voice)
 MIMO_MODEL=mimo-v2.6-flash
+# Optional: gives Mark web search for news, scores and prices (tavily.com)
+TAVILY_API_KEY=tvly-your-key
 ```
 
 Get a MiMo key from the Xiaomi MiMo API platform. Mark disables MiMo's

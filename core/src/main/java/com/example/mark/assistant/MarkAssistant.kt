@@ -22,6 +22,9 @@ import com.example.mark.tools.TimeTool
 import com.example.mark.tools.VolumeTool
 import com.example.mark.tools.WatchStatusTool
 import com.example.mark.tools.WeatherTool
+import com.example.mark.tools.WebSearchTool
+import com.example.mark.network.RetrofitClient
+import com.example.mark.utils.Constants
 import com.example.mark.repository.FirestoreMemoryStore
 import com.example.mark.repository.LocalMemoryStore
 import com.example.mark.repository.MemoryStore
@@ -126,6 +129,10 @@ object MarkAssistant {
             // On the watch this is only ever a schema: LAPTOP_CONTROL always runs
             // on the phone, so the call is forwarded rather than executed here.
             add(LaptopTool(appContext))
+            // Web search only when a key is configured, so the model never tries a dead tool.
+            if (Constants.TAVILY_API_KEY.isNotBlank()) {
+                add(WebSearchTool(RetrofitClient.tavilyApi, Constants.TAVILY_API_KEY))
+            }
         } + extraTools
 
         // The watch's LLM can use every phone tool too; each call is carried to

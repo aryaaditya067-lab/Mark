@@ -17,6 +17,22 @@ interface WeatherApiService {
         @Query("units") units: String = "metric"
     ): WeatherResponse
 
+    /** 5-day forecast in 3-hour steps. */
+    @GET("data/2.5/forecast")
+    suspend fun forecastByCoords(
+        @Query("lat") lat: Double,
+        @Query("lon") lon: Double,
+        @Query("appid") apiKey: String,
+        @Query("units") units: String = "metric"
+    ): ForecastResponse
+
+    @GET("data/2.5/forecast")
+    suspend fun forecastByCity(
+        @Query("q") city: String,
+        @Query("appid") apiKey: String,
+        @Query("units") units: String = "metric"
+    ): ForecastResponse
+
     @GET("data/2.5/weather")
     suspend fun byCity(
         @Query("q") city: String,
@@ -41,6 +57,23 @@ data class MainWeather(
     val temp: Double?,
     val feels_like: Double?,
     val humidity: Int?
+)
+
+data class ForecastResponse(
+    val city: ForecastCity?,
+    val list: List<ForecastEntry>?
+)
+
+data class ForecastCity(
+    val name: String?,
+    val timezone: Int?                       // seconds east of UTC
+)
+
+data class ForecastEntry(
+    val dt: Long?,                           // epoch seconds
+    val main: MainWeather?,
+    val weather: List<WeatherDescription>?,
+    val pop: Double?                         // probability of precipitation, 0..1
 )
 
 data class Wind(

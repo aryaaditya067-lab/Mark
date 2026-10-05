@@ -13,6 +13,9 @@ object Constants {
     val WEATHER_API_KEY: String = BuildConfig.WEATHER_API_KEY
     const val WEATHER_BASE_URL = "https://api.openweathermap.org/"
 
+    /** Optional: set TAVILY_API_KEY in local.properties to give Mark web search. */
+    val TAVILY_API_KEY: String = BuildConfig.TAVILY_API_KEY
+
     /**
      * Mark's character and rules for the LLM. Replies are SPOKEN, so the format
      * rules matter as much as the persona. Device context, date/time and what
@@ -41,6 +44,8 @@ object Constants {
             "When the user tells you something lasting about themselves (people, preferences, where they " +
             "keep things) or says 'remember' / 'yaad rakhna', save it with remember_fact and acknowledge " +
             "briefly; use forget_fact when they ask you to forget. Use what you know naturally.\n" +
+            "For anything current (news, scores, prices, recent events), use web_search if you have it; " +
+            "mention at most two sources by site name and never read out URLs.\n" +
             "If you don't know something and no tool can find it, say so briefly. Never invent facts about the user."
     // 8 left room for only two or three real exchanges once tool calls and
     // offline command pairs were counted.
