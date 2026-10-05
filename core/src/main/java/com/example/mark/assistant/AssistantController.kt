@@ -75,6 +75,8 @@ class AssistantController(
         /** Tool rounds per question before the model must answer in words. */
         private const val MAX_TOOL_ROUNDS = 5
 
+        private val MARKDOWN_SYMBOLS = Regex("[*#`]")
+
         // Intents that ALWAYS run on the phone when spoken from the watch.
         private val ALWAYS_REMOTE = setOf(
             IntentType.TOGGLE_FLASHLIGHT, IntentType.SET_DND, IntentType.GET_CALENDAR, IntentType.RING_PHONE,
@@ -405,7 +407,7 @@ class AssistantController(
         val stored = HistoryWindow.select(past, Constants.MAX_HISTORY_MESSAGES)
         persist(Message(role = "user", content = userText))
         val messages = buildList {
-            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt()))
+            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt(isWatch)))
             addAll(stored.map { it.toLlmMessage() })
             add(LlmMessage(role = "user", content = userText))
         }.toMutableList()
@@ -419,7 +421,9 @@ class AssistantController(
             askStream(messages, offerTools).collect { chunk ->
                 val delta = chunk.choices?.firstOrNull()?.delta ?: return@collect
                 calls.add(delta.toolCalls)
-                delta.content?.takeIf { it.isNotEmpty() }?.let {
+                // Markdown symbols are read aloud literally by TTS ("asterisk").
+                // Single characters, so stripping per chunk is safe mid-stream.
+                delta.content?.replace(MARKDOWN_SYMBOLS, "")?.takeIf { it.isNotEmpty() }?.let {
                     text += it
                     emit(AssistantEvent.Text(it, ReplyMode.SPEAK))
                 }

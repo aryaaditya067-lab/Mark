@@ -94,6 +94,22 @@ class AssistantControllerLlmTest {
     }
 
     @Test
+    fun stripsMarkdownBeforeSpeaking() {
+        val api = FakeLlm(text("**Done**", ", sir. `ok`"))
+        assertEquals(listOf("Done", ", sir. ok"), controller(api).ask(question).texts())
+    }
+
+    @Test
+    fun systemPromptCarriesPersonaAndDevice() {
+        val api = FakeLlm(text("Hi."))
+        controller(api).ask(question)
+        val system = api.requests.single().messages.first()
+        assertEquals("system", system.role)
+        assertTrue(system.content!!.contains("JARVIS"))
+        assertTrue(system.content!!.contains("Android phone"))
+    }
+
+    @Test
     fun sendsTheQuestionOnce() {
         val api = FakeLlm(text("Hi."))
         controller(api).ask(question)
