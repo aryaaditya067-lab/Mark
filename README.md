@@ -121,7 +121,66 @@ The routing pipeline consists of:
 
 ------------------------------------------------------------------------
 
-## 6. Setup
+## 6. Jarvis Features
+
+-   **Talks while it thinks.** LLM replies stream into speech as they
+    are generated; "One moment, sir" covers tool calls; music ducks
+    under Mark's voice instead of the volume being forced up.
+-   **Does several things per request.** The model can chain tools over
+    several rounds ("check my tasks and set an alarm for the first").
+-   **Asks before anything irreversible.** Calls, messages, chat replies,
+    forgetting memories and laptop actions that change things are only
+    carried out after a spoken "yes" to a question built from the real
+    details (number, text, action). A "yes" only counts right after the
+    question.
+-   **Remembers you.** "Yaad rakhna, my wife's birthday is 12 March."
+    Facts are listed and deletable in Settings, separate from chat.
+-   **Knows the moment.** Each question carries your name, battery,
+    next meetings and pending tasks (calendar/tasks can be switched off).
+-   **Reminders that fire.** "Remind me at 6 to take medicine",
+    "in 20 minutes", "every day". Notification with Done / Snooze on the
+    phone, mirrored to the watch.
+-   **Morning brief.** Optional daily notification (weather forecast,
+    meetings, reminders, battery) with Listen, plus a heads-up 10
+    minutes before each meeting.
+-   **One brain on the watch.** The watch's AI can use every phone tool
+    (notifications, calls, messages, navigation, reminders, laptop).
+-   **Messages.** Read a whole chat, reply inside WhatsApp / Telegram /
+    Messages via the notification, and optionally hear new messages in
+    your headphones (never 22:00 to 07:00 or in Do Not Disturb).
+-   **One press away.** Pick Mark as the digital assistant and long-press
+    power to talk; also a Quick Settings tile and a "Talk to Mark"
+    launcher shortcut.
+-   **Web and forecast.** Current news/scores/prices with a Tavily key;
+    "kal barish hogi?" uses the 5-day forecast.
+-   **Laptop.** Set it up in Settings (IP, token, MAC), test the
+    connection, and wake it with "laptop jagao" (Wake-on-LAN). The token
+    is only sent over Wi-Fi and is excluded from backups.
+
+### First-run checklist (phone)
+
+1.  Fill in `local.properties` (below) and build.
+2.  Grant the permissions Mark asks for (microphone, contacts, phone,
+    SMS, calendar, notifications).
+3.  Settings in Mark: your name; Do Not Disturb access; optionally the
+    morning brief time, message announcements and the laptop.
+4.  Android Settings: Default apps > Digital assistant app > Mark (for
+    long-press power). Allow notification access for Mark (messages).
+    Optionally allow "Alarms & reminders" for to-the-minute reminders,
+    and exclude Mark from battery optimisation.
+
+### Not built yet
+
+-   **"Hey Mark" wake word (desk mode).** Needs an offline keyword
+    engine (e.g. sherpa-onnx, free) bundled as a native library plus a
+    model, a microphone foreground service, and tuning on a real phone.
+    Planned as opt-in, phone-only, while charging. Never on the watch
+    (battery).
+-   **Watch Tile / complication** for one-tap talk on the watch.
+
+------------------------------------------------------------------------
+
+## 7. Setup
 
 API keys are read at build time from `local.properties` in the project
 root (already gitignored), or from environment variables of the same
@@ -132,6 +191,8 @@ MIMO_API_KEY=your-mimo-key
 WEATHER_API_KEY=your-openweathermap-key
 # Optional, defaults to mimo-v2.6-flash (fastest replies for voice)
 MIMO_MODEL=mimo-v2.6-flash
+# Optional: gives Mark web search for news, scores and prices (tavily.com)
+TAVILY_API_KEY=tvly-your-key
 ```
 
 Get a MiMo key from the Xiaomi MiMo API platform. Mark disables MiMo's
@@ -139,7 +200,7 @@ Get a MiMo key from the Xiaomi MiMo API platform. Mark disables MiMo's
 
 Without `MIMO_API_KEY` the offline router still works; online requests
 report that the key is missing. Without `WEATHER_API_KEY` weather lookups
-fail.
+fail. Without `TAVILY_API_KEY` Mark simply has no web search.
 
 Firebase is configured by `app/google-services.json` (phone) and
 `wear/google-services.json` (watch). To use your own Firebase project,

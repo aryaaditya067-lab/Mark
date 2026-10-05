@@ -69,6 +69,29 @@ class RegexIntentResolverTest {
     }
 
     @Test
+    fun testRemindMeToIsATask() {
+        val match = resolver.resolve("remind me to buy milk")
+        assertEquals(IntentType.ADD_TASK, match.intent?.type)
+        assertEquals("buy milk", match.intent?.params?.get("content"))
+    }
+
+    @Test
+    fun testRemindMeToCallIsNotACall() {
+        // Used to route to CALL_CONTACT and dial "Mom" immediately.
+        val match = resolver.resolve("remind me to call mom")
+        assertEquals(IntentType.ADD_TASK, match.intent?.type)
+        assertEquals("call mom", match.intent?.params?.get("content"))
+    }
+
+    @Test
+    fun testTimedReminderGoesToTheModel() {
+        // A to-do with a time must actually fire, so the LLM schedules it with set_reminder.
+        for (phrase in listOf("remind me to call mom tomorrow", "remind me to take medicine at 6", "note kar dawai 6 baje")) {
+            assertEquals(phrase, null, resolver.resolve(phrase).intent)
+        }
+    }
+
+    @Test
     fun testGetTasksIntent() {
         val match = resolver.resolve("task dikha")
         assertEquals(IntentType.GET_TASKS, match.intent?.type)
@@ -79,5 +102,29 @@ class RegexIntentResolverTest {
         val match = resolver.resolve("task complete 2")
         assertEquals(IntentType.COMPLETE_TASK, match.intent?.type)
         assertEquals("2", match.intent?.params?.get("index"))
+    }
+
+    @Test
+    fun testLaptopWakePhrases() {
+        for (phrase in listOf("laptop on karo", "wake up the laptop", "laptop jagao", "turn on my laptop", "laptop start karo")) {
+            val match = resolver.resolve(phrase)
+            assertEquals(phrase, IntentType.LAPTOP_CONTROL, match.intent?.type)
+            assertEquals(phrase, "wake", match.intent?.params?.get("action"))
+        }
+    }
+
+    @Test
+    fun testSpecificLaptopActionsBeatWake() {
+        assertEquals("open", resolver.resolve("laptop pe chrome start karo").intent?.params?.get("action"))
+        assertEquals("wifi", resolver.resolve("laptop pe wifi on karo").intent?.params?.get("action"))
+        assertEquals("restart", resolver.resolve("laptop dobara chalu karo").intent?.params?.get("action"))
+    }
+
+    @Test
+    fun testLaptopBandKaroLocksInsteadOfPausingMusic() {
+        val match = resolver.resolve("laptop band karo")
+        assertEquals(IntentType.LAPTOP_CONTROL, match.intent?.type)
+        assertEquals("lock", match.intent?.params?.get("action"))
+        assertEquals(IntentType.MEDIA_CONTROL, resolver.resolve("gaana band karo").intent?.type)
     }
 }

@@ -1,9 +1,11 @@
 package com.example.mark.utils
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
@@ -25,13 +27,47 @@ class SpeechRecognizerHelper(private val context: Context) {
             } else {
                 android.util.Log.d("MarkDiag", "onDeviceRecognition = unsure (API < 31)")
             }
-            SpeechRecognizer.createSpeechRecognizer(context)
+            externalRecognizer(context)
+                ?.let { SpeechRecognizer.createSpeechRecognizer(context, it) }
+                ?: SpeechRecognizer.createSpeechRecognizer(context)
         } else null
+
+    private companion object {
+        const val OWN_CANCEL_WINDOW_MS = 1500L
+        const val GOOGLE_PACKAGE = "com.google.android.googlequicksearchbox"
+
+        /**
+         * A real recognition service from another app, Google's preferred.
+         *
+         * When Mark is the default digital assistant, Android makes Mark's own
+         * (stub) RecognitionService the system default, and a plain
+         * createSpeechRecognizer(context) would bind to it and hear nothing.
+         * So the recognizer is always picked explicitly, never our own.
+         */
+        fun externalRecognizer(context: Context): ComponentName? {
+            val services = context.packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+                .map { it.serviceInfo }
+                .filter { it.packageName != context.packageName }
+            val pick = services.firstOrNull { it.packageName == GOOGLE_PACKAGE } ?: services.firstOrNull()
+            return pick?.let { ComponentName(it.packageName, it.name) }
+        }
+    }
 
     private val _partialResults = MutableStateFlow("")
     val partialResults: StateFlow<String> = _partialResults.asStateFlow()
 
     private var lastVoiceTime = 0L
+
+    /** When we last cancelled the recognizer ourselves; its ERROR_CLIENT echo is ignored. */
+    @Volatile private var ownCancelAt = 0L
+
+    /**
+     * True from startListening until its result or error. Callbacks outside a
+     * session are dropped: the recognizer answers a stop on an idle session
+     * with ERROR_CLIENT, which used to be reported as a silence and made the
+     * watch reopen the mic right after the session had ended.
+     */
+    @Volatile private var sessionActive = false
     private val SILENCE_THRESHOLD_MS = 2000L
     private val AMPLITUDE_THRESHOLD = 0.2f
 
@@ -63,18 +99,24 @@ class SpeechRecognizerHelper(private val context: Context) {
             return
         }
 
-        // Reset state
+        // Reset state. cancel() echoes back as ERROR_CLIENT, which is ignored below.
+        ownCancelAt = System.currentTimeMillis()
         rec.cancel()
+        sessionActive = true
 
         rec.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle?) {
+                if (!sessionActive) return
+                sessionActive = false
                 val text = results
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
                     .orEmpty()
                 android.util.Log.d("MarkSpeech", "onResults: $text")
                 _partialResults.value = ""
-                if (text.isNotBlank()) onResult(text)
+                // An empty result used to end listening with no result and no error,
+                // which left phone voice mode stuck on "Listening" for good.
+                if (text.isNotBlank()) onResult(text) else onError(errorText(SpeechRecognizer.ERROR_NO_MATCH))
                 onDone()
             }
 
@@ -91,12 +133,21 @@ class SpeechRecognizerHelper(private val context: Context) {
 
             override fun onError(error: Int) {
                 _partialResults.value = ""
-                if (error == SpeechRecognizer.ERROR_CLIENT) {
-                    android.util.Log.d("MarkSpeech", "Ignoring Client Error (likely from cancel())")
-                    return 
+                if (!sessionActive) {
+                    android.util.Log.d("MarkSpeech", "Ignoring error $error outside a session")
+                    return
                 }
-                
-                val msg = errorText(error)
+                if (error == SpeechRecognizer.ERROR_CLIENT &&
+                    System.currentTimeMillis() - ownCancelAt < OWN_CANCEL_WINDOW_MS
+                ) {
+                    android.util.Log.d("MarkSpeech", "Ignoring Client Error from our own cancel()")
+                    return
+                }
+                sessionActive = false
+
+                // Any other ERROR_CLIENT used to be swallowed too, without onDone,
+                // so the caller waited forever. It is reported as a silence.
+                val msg = errorText(if (error == SpeechRecognizer.ERROR_CLIENT) SpeechRecognizer.ERROR_NO_MATCH else error)
                 android.util.Log.e("MarkSpeech", "onError: $error ($msg)")
                 onError(msg)
                 onDone()
@@ -120,7 +171,8 @@ class SpeechRecognizerHelper(private val context: Context) {
 
                 if (amp > AMPLITUDE_THRESHOLD) {
                     lastVoiceTime = System.currentTimeMillis()
-                } else if (System.currentTimeMillis() - lastVoiceTime > SILENCE_THRESHOLD_MS) {
+                } else if (sessionActive && System.currentTimeMillis() - lastVoiceTime > SILENCE_THRESHOLD_MS) {
+                    lastVoiceTime = Long.MAX_VALUE / 2 // once per session
                     rec.stopListening()
                 }
             }
@@ -144,8 +196,20 @@ class SpeechRecognizerHelper(private val context: Context) {
         rec.startListening(intent)
     }
 
+    /** Finish now and deliver what was heard (e.g. the user tapped stop mid-sentence). */
     fun stopListening() {
-        recognizer?.stopListening()
+        if (sessionActive) recognizer?.stopListening()
+    }
+
+    /**
+     * Abort: no result, no error callback. For ending a session or closing a
+     * screen, where a late "Didn't catch that." must not restart anything.
+     */
+    fun cancel() {
+        if (!sessionActive) return
+        sessionActive = false
+        ownCancelAt = System.currentTimeMillis()
+        recognizer?.cancel()
     }
 
     fun shutdown() {

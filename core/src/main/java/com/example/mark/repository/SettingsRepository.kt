@@ -20,6 +20,11 @@ class SettingsRepository(private val context: Context) {
         val VOICE_OUTPUT = booleanPreferencesKey("voice_output")
         val VOICE_NAME = stringPreferencesKey("tts_voice_name")
         val SAVED_PLACES = stringPreferencesKey("saved_places")
+        val USER_NAME = stringPreferencesKey("user_name")
+        val BRIEF_ENABLED = booleanPreferencesKey("brief_enabled")
+        val BRIEF_TIME = stringPreferencesKey("brief_time")
+        val ANNOUNCE_MESSAGES = booleanPreferencesKey("announce_messages")
+        val SHARE_SCHEDULE = booleanPreferencesKey("share_schedule")
     }
 
     private val gson = com.google.gson.Gson()
@@ -60,6 +65,45 @@ class SettingsRepository(private val context: Context) {
      */
     val voiceOutputEnabled: Flow<Boolean> =
         context.dataStore.data.map { it[Keys.VOICE_OUTPUT] ?: false }
+
+    /** What Mark should call the user; blank when not set. */
+    val userName: Flow<String> =
+        context.dataStore.data.map { it[Keys.USER_NAME] ?: "" }
+
+    suspend fun setUserName(name: String) {
+        context.dataStore.edit { it[Keys.USER_NAME] = name.trim() }
+    }
+
+    /** Whether calendar and task titles are included with every AI question. */
+    val shareSchedule: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.SHARE_SCHEDULE] ?: true }
+
+    suspend fun setShareSchedule(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHARE_SCHEDULE] = enabled }
+    }
+
+    /** Speak new chat messages into headphones; off unless the user turns it on. */
+    val announceMessages: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.ANNOUNCE_MESSAGES] ?: false }
+
+    suspend fun setAnnounceMessages(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.ANNOUNCE_MESSAGES] = enabled }
+    }
+
+    /** Daily brief notification; off until the user turns it on. */
+    val briefEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.BRIEF_ENABLED] ?: false }
+
+    /** "HH:mm", local time. */
+    val briefTime: Flow<String> =
+        context.dataStore.data.map { it[Keys.BRIEF_TIME] ?: "07:30" }
+
+    suspend fun setBrief(enabled: Boolean, time: String) {
+        context.dataStore.edit {
+            it[Keys.BRIEF_ENABLED] = enabled
+            it[Keys.BRIEF_TIME] = time
+        }
+    }
 
     /**
      * Flow that emits the selected TTS voice name.

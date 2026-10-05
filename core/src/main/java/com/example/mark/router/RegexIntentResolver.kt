@@ -34,7 +34,11 @@ class RegexIntentResolver {
         private const val SLEEP      = "sleep|slept|rest|sleeping|neend|nind|soya|soyi"
         private const val HEART      = "heart ?rate|heart ?beat|pulse|bpm|dhadkan|dil ki dhadkan|hr|heart"
         private const val WEATHER    = "weather|temperature|forecast|rain|raining|barish|baaris|hot|cold|garmi|thand|mausam"
-        private const val T_ADD      = "task add kar|ye kaam add kar|note kar|yaad rakhna|task banao|add task|remind me to"
+        // "yaad rakhna" is deliberately absent: "yaad rakhna, meri car ki chabi drawer
+        // mein hai" is a fact to remember, not a to-do, so it goes to the LLM.
+        // "remind to", not "remind me to": "me" is a filler token and is stripped
+        // before matching, so "remind me to" could never match.
+        private const val T_ADD      = "task add kar|ye kaam add kar|note kar|task banao|add task|remind to"
         // NOTE: "hai" is a filler token and is stripped before matching, so patterns must not contain it.
         private const val T_GET      = "task dikha|kya kaam|mere tasks|task list|pending kaam|what are my tasks|my tasks"
         private const val T_DONE     = "task \\d+ as done|task \\d+ done|task complete|ye kaam ho gaya|task done|mark done|complete kar"
@@ -69,13 +73,18 @@ class RegexIntentResolver {
         // "band kar" deliberately maps to LOCK, not shutdown: it is ambiguous in
         // Hinglish and lock is the harmless reading. Shutdown needs an explicit word.
         private const val LAPTOP     = "laptop|lapy|pc|computer|macbook|desktop"
-        private const val L_LOCK     = "lock|band kar|bandh kar"
+        // "karo" forms too: "band kar\b" does not match "band karo", so
+        // "laptop band karo" fell through to MEDIA_CONTROL and paused music.
+        private const val L_LOCK     = "lock|band kar|bandh kar|band karo|bandh karo"
         private const val L_SLEEP    = "sleep|sula|sulaa|hibernate|so jaye"
         private const val L_SCROFF   = "screen off|screen band|display band|monitor off|screen bandh"
         private const val L_SHUTDOWN = "shutdown|shut down|power off|turn off|switch off|poweroff"
         private const val L_RESTART  = "restart|reboot|dobara chalu|dubara start"
         private const val L_LOGOFF   = "log off|logoff|logout|log out|sign out"
         private const val L_CANCEL   = "cancel|abort|rehne de|stop shutdown"
+        // Wake-on-LAN. Generic verbs, so the rule sits below every specific laptop
+        // action: "laptop pe chrome start karo" still opens Chrome.
+        private const val L_WAKE     = "wake|wake up|jagao|jaga|uthao|on kar|on karo|chalu kar|chalu karo|start kar|start karo|turn on|switch on|power on"
         private const val L_CLOSE    = "close|band|quit|kill|exit|khatam"
         private const val L_SWITCH   = "switch|alt tab|change window|window badal|next window"
         private const val L_FOLDER   = "downloads|desktop|documents|projects|mark folder|download folder"
@@ -224,7 +233,7 @@ class RegexIntentResolver {
             // "restart" -> "start" (then OPEN_APP fired with app_name="kar")
             // "code"    -> "cold"  (then the open rule stopped matching).
             // Any new constant added above has to be added to this list too.
-            LAPTOP, L_LOCK, L_SLEEP, L_SCROFF, L_SHUTDOWN, L_RESTART, L_LOGOFF, L_CANCEL,
+            LAPTOP, L_LOCK, L_SLEEP, L_SCROFF, L_SHUTDOWN, L_RESTART, L_LOGOFF, L_CANCEL, L_WAKE,
             L_CLOSE, L_SWITCH, L_FOLDER, L_SHOT, L_RECORD, L_BRIGHT, L_DARK, L_WIFI,
             L_SEARCH, L_YT, L_GRADLE, L_CLIPGET, L_CLIPSET, L_TYPE, L_FG, L_STATUS, L_APP
         )
@@ -370,12 +379,17 @@ class RegexIntentResolver {
     private val spanLeading = Regex("""^(?:to|ke|tak|par|se|pe|the|a|an|my|mere)\s+""")
     private val spanTrailing = Regex("""\s+(?:dikhao|dikha|batao|bata|karo|kardo|kar|chalao|chala|milao|mila|lagao|laga|do|de|please|phone|mobile)$""")
 
+    /**
+     * The anchor was matched on NORMALIZED text, where fillers ("me", "please")
+     * are gone, but the content is cut from the raw input. So the anchor is
+     * located in the raw input allowing one dropped word between its tokens:
+     * anchor "remind to" finds "remind me to".
+     */
     private fun extractTaskContent(rawInput: String, anchor: String): String? {
-        val lowerRaw = rawInput.lowercase()
-        val anchorIdx = lowerRaw.indexOf(anchor.lowercase())
-        if (anchorIdx == -1) return null
-        val content = rawInput.substring(anchorIdx + anchor.length).trim()
-        return content.ifBlank { null }
+        val tokens = anchor.trim().split(Regex("""\s+""")).map { Regex.escape(it) }
+        val pattern = Regex(tokens.joinToString("""\s+(?:\S+\s+)?"""), RegexOption.IGNORE_CASE)
+        val match = pattern.find(rawInput) ?: return null
+        return rawInput.substring(match.range.last + 1).trim().ifBlank { null }
     }
 
     private fun extractTaskIndex(text: String): String? =
@@ -573,7 +587,10 @@ class RegexIntentResolver {
         Rule(IntentType.GET_WEATHER, Regex("""\b(?:$WEATHER)\b""")),
 
         Rule(IntentType.COMPLETE_TASK, Regex("""\b(?:$T_DONE)\b"""), extractors = listOf("task_index"), priority = 5),
-        Rule(IntentType.ADD_TASK, Regex("""\b(?:$T_ADD)\b"""), extractors = listOf("task_content"), priority = 5),
+        // A to-do with a time ("remind me to call mom at 6", "kal subah note kar")
+        // is a reminder that must fire, so it goes to the LLM's set_reminder.
+        Rule(IntentType.ADD_TASK, Regex("""\b(?:$T_ADD)\b"""), extractors = listOf("task_content"), priority = 5,
+            blockedBy = Regex("""(?i)\b(?:\d{1,2}(?::\d{2})?\s*(?:baje|bje|am|pm)|at\s+\d{1,2}|in\s+\d+|\d+\s*(?:minute|minutes|min|mins|ghante|ghanta|hour|hours)|tomorrow|tonight|subah|shaam|sham|raat|dopahar|morning|evening|kal)\b""")),
         Rule(IntentType.GET_TASKS, Regex("""\b(?:$T_GET)\b"""), blockedBy = Regex("""(?i)\b(?:delete|remove)\b""")),
 
         Rule(IntentType.GET_CALENDAR, Regex("""\b(?:$CALENDAR)\b""")),
@@ -603,10 +620,11 @@ class RegexIntentResolver {
         Rule(IntentType.SET_ROTATE, Regex("""\b(?:$ROTATE)\b"""),
             extractors = listOf("lock_state")),
 
+        // "remind": "remind me to call mom" is a to-do, not a call to place now.
         Rule(IntentType.CALL_CONTACT, Regex("""\b(?:$CALL)\b"""), extractors = listOf("contact"),
-            blockedBy = Regex("""(?i)\b(?:create|schedule\s+(?:a|an))\b""")),
+            blockedBy = Regex("""(?i)\b(?:create|schedule\s+(?:a|an)|remind)\b""")),
         Rule(IntentType.SEND_SMS, Regex("""\b(?:$SMS)\b"""), extractors = listOf("message_body"),
-            blockedBy = Regex("""(?i)\b(?:create|schedule\s+(?:a|an))\b""")),
+            blockedBy = Regex("""(?i)\b(?:create|schedule\s+(?:a|an)|remind)\b""")),
 
         Rule(IntentType.RING_PHONE, Regex("""\b(?:$RING)\b.*\b(?:$PHONE)\b"""),
             extractors = listOf("state"), priority = 5),
@@ -727,6 +745,9 @@ class RegexIntentResolver {
         Rule(IntentType.LAPTOP_CONTROL,
             Regex("""\b(?:$LAPTOP)\b.*\b(?:$L_LOCK)\b|\b(?:$L_LOCK)\b.*\b(?:$LAPTOP)\b"""),
             fixedParams = mapOf("action" to "lock"), priority = 24),
+        Rule(IntentType.LAPTOP_CONTROL,
+            Regex("""\b(?:$LAPTOP)\b.*\b(?:$L_WAKE)\b|\b(?:$L_WAKE)\b.*\b(?:$LAPTOP)\b"""),
+            fixedParams = mapOf("action" to "wake"), priority = 20),
         // Status needs a status word. The old version also matched a BARE
         // "laptop", which meant a half-heard command — speech recognition emits
         // "laptop", then "laptop lock", then "laptop lock kar" — could fire a

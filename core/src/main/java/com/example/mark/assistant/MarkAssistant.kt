@@ -22,6 +22,21 @@ import com.example.mark.tools.TimeTool
 import com.example.mark.tools.VolumeTool
 import com.example.mark.tools.WatchStatusTool
 import com.example.mark.tools.WeatherTool
+import com.example.mark.tools.WebSearchTool
+import com.example.mark.network.RetrofitClient
+import com.example.mark.utils.Constants
+import com.example.mark.repository.FirestoreMemoryStore
+import com.example.mark.repository.LocalMemoryStore
+import com.example.mark.repository.MemoryStore
+import com.example.mark.repository.SettingsRepository
+import com.example.mark.repository.TaskRepository
+import com.example.mark.utils.DeviceSituation
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import com.example.mark.tools.ForgetFactTool
+import com.example.mark.tools.RememberFactTool
 import com.example.mark.utils.LazyLocationProvider
 import com.example.mark.utils.PlayLocationProvider
 
@@ -34,6 +49,27 @@ import com.example.mark.utils.PlayLocationProvider
 object MarkAssistant {
 
     private var instance: AssistantController? = null
+    @Volatile private var memoryStore: MemoryStore? = null
+    @Volatile private var situationCache: CachedSituation? = null
+
+    private fun isWatch(context: Context) =
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)
+
+    /**
+     * The one memory store of this process, shared by the assistant and the
+     * Settings screen so both see the same facts. The watch never touches
+     * Firestore, so its memory stays on the watch.
+     */
+    fun memory(context: Context): MemoryStore = memoryStore ?: synchronized(this) {
+        memoryStore ?: (
+            if (isWatch(context)) LocalMemoryStore(context.applicationContext) else FirestoreMemoryStore()
+        ).also { memoryStore = it }
+    }
+
+    /** Call after changing something the situation snapshot shows, such as the user's name. */
+    fun refreshSituation() {
+        situationCache?.invalidate()
+    }
 
     /**
      * Gets the shared instance of the assistant, creating it if necessary.
@@ -50,11 +86,26 @@ object MarkAssistant {
         val appContext = context.applicationContext
         val pm = appContext.packageManager
         val isWatch = pm.hasSystemFeature(PackageManager.FEATURE_WATCH)
+        val memory = memory(appContext)
+        val situation = CachedSituation(
+            SettingsRepository(appContext).let { settings ->
+                DeviceSituation(
+                    appContext,
+                    isWatch = isWatch,
+                    shareSchedule = { settings.shareSchedule.first() },
+                    settings = settings,
+                    tasks = if (isWatch) null else TaskRepository.instance
+                )
+            },
+            CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        ).also { situationCache = it }
 
         val tools = buildList {
             add(AddTaskTool())
             add(GetTasksTool())
             add(CompleteTaskTool())
+            add(RememberFactTool(memory))
+            add(ForgetFactTool(memory))
             add(AlarmTool(appContext))
             
             val location = if (isWatch) {
@@ -79,17 +130,25 @@ object MarkAssistant {
             add(timeTool)
             add(TimeTool.TimerQuery(timeTool))
             add(OpenAppTool(appContext))
-            if (!isWatch) {
-                add(LaptopTool(appContext))
+            // On the watch this is only ever a schema: LAPTOP_CONTROL always runs
+            // on the phone, so the call is forwarded rather than executed here.
+            add(LaptopTool(appContext))
+            // Web search only when a key is configured, so the model never tries a dead tool.
+            if (Constants.TAVILY_API_KEY.isNotBlank()) {
+                add(WebSearchTool(RetrofitClient.tavilyApi, Constants.TAVILY_API_KEY))
             }
-            
-            // Only add tools added via extraTools to specific modules.
         } + extraTools
 
+        // The watch's LLM can use every phone tool too; each call is carried to
+        // the phone by intent, with the same spoken-yes gate.
+        val allTools = if (isWatch) tools + PhoneToolSchemas.remoteTools(tools.map { it.name }.toSet()) else tools
+
         return AssistantController(
-            toolManager = ToolManager(ToolRegistry(tools)),
+            toolManager = ToolManager(ToolRegistry(allTools)),
             isWatch = isWatch,
-            transport = if (isWatch) CommandTransport(appContext) else null
+            transport = if (isWatch) CommandTransport(appContext) else null,
+            memory = memory,
+            situation = situation
         )
     }
 }

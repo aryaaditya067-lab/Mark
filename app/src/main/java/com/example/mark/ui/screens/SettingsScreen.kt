@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,12 +36,29 @@ fun SettingsScreen(
     val voiceOutputEnabled by settingsViewModel.voiceOutputEnabled.collectAsState()
     val selectedVoice by settingsViewModel.voiceName.collectAsState()
     val savedPlaces by settingsViewModel.savedPlaces.collectAsState()
+    val userName by settingsViewModel.userName.collectAsState()
+    val facts by settingsViewModel.facts.collectAsState()
+    val announceMessages by settingsViewModel.announceMessages.collectAsState()
+    val shareSchedule by settingsViewModel.shareSchedule.collectAsState()
+    val briefEnabled by settingsViewModel.briefEnabled.collectAsState()
+    val briefTime by settingsViewModel.briefTime.collectAsState()
+    val laptopConfig by settingsViewModel.laptopConfig.collectAsState()
+    val laptopStatus by settingsViewModel.laptopStatus.collectAsState()
+    LaunchedEffect(Unit) { settingsViewModel.refreshFacts() }
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showClearDialog by remember { mutableStateOf(false) }
     var showVoiceDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val voices = remember { settingsViewModel.ttsManager.availableVoices() }
+    // The engine may still be starting when Settings first opens; retry briefly.
+    var voices by remember { mutableStateOf(settingsViewModel.ttsManager.availableVoices(includeOnline = true)) }
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            if (voices.isNotEmpty()) return@LaunchedEffect
+            kotlinx.coroutines.delay(1_000)
+            voices = settingsViewModel.ttsManager.availableVoices(includeOnline = true)
+        }
+    }
 
     val context = LocalContext.current
     val notificationManager = remember { context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
@@ -98,6 +116,28 @@ fun SettingsScreen(
                 )
             }
 
+            val isAssistant = remember {
+                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                    context.getSystemService(android.app.role.RoleManager::class.java)
+                        ?.isRoleHeld(android.app.role.RoleManager.ROLE_ASSISTANT) == true
+            }
+            ListItem(
+                headlineContent = { Text("Make Mark your assistant") },
+                supportingContent = {
+                    Text(
+                        if (isAssistant) "Done: long-press power (or the assist gesture) opens Mark"
+                        else "Default apps > Digital assistant app > Mark. Then long-press power to talk."
+                    )
+                },
+                modifier = Modifier.clickable {
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+                    }.onFailure {
+                        runCatching { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                    }
+                }
+            )
+
             ListItem(
                 headlineContent = { Text("Do Not Disturb access") },
                 supportingContent = { Text(if (isDndGranted) "Granted" else "Tap to allow Mark to manage DND") },
@@ -117,6 +157,61 @@ fun SettingsScreen(
                     }
                 }
             )
+
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("About you", style = MaterialTheme.typography.titleMedium)
+
+            var nameInput by remember(userName) { mutableStateOf(userName) }
+            OutlinedTextField(
+                value = nameInput,
+                onValueChange = { nameInput = it },
+                label = { Text("What should Mark call you?") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                trailingIcon = {
+                    if (nameInput.trim() != userName) {
+                        IconButton(onClick = { settingsViewModel.setUserName(nameInput) }) {
+                            Icon(Icons.Default.Done, contentDescription = "Save")
+                        }
+                    }
+                }
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Text("What Mark remembers", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Say \"Mark, yaad rakhna ...\" to add, or delete here. With every question, the AI " +
+                    "service (Xiaomi MiMo) receives your name, these facts, your battery level and, if " +
+                    "allowed below, your next meetings and pending tasks; plus whatever a tool reads for " +
+                    "that question (messages, contacts, notifications).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+            )
+            ListItem(
+                headlineContent = { Text("Share calendar and tasks with the AI") },
+                supportingContent = { Text("Lets Mark mention your next meeting or pending tasks without being asked") },
+                trailingContent = {
+                    Switch(checked = shareSchedule, onCheckedChange = { settingsViewModel.setShareSchedule(it) })
+                }
+            )
+            if (facts.isEmpty()) {
+                Text(
+                    "Nothing yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+            facts.forEach { fact ->
+                ListItem(
+                    headlineContent = { Text(fact.text) },
+                    trailingContent = {
+                        IconButton(onClick = { settingsViewModel.forget(fact) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Forget")
+                        }
+                    }
+                )
+            }
 
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
@@ -152,6 +247,96 @@ fun SettingsScreen(
                     }
                 }
             )
+
+            ListItem(
+                headlineContent = { Text("Read new messages aloud") },
+                supportingContent = {
+                    Text("WhatsApp, Messages, Telegram. Only into headphones, never 10 pm to 7 am or in Do Not Disturb. Needs notification access.")
+                },
+                trailingContent = {
+                    Switch(checked = announceMessages, onCheckedChange = { settingsViewModel.setAnnounceMessages(it) })
+                }
+            )
+
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("Morning brief", style = MaterialTheme.typography.titleMedium)
+            var briefTimeInput by remember(briefTime) { mutableStateOf(briefTime) }
+            ListItem(
+                headlineContent = { Text("Daily brief notification") },
+                supportingContent = {
+                    Text("Weather, meetings, reminders and battery, with a heads-up 10 minutes before each meeting")
+                },
+                trailingContent = {
+                    Switch(
+                        checked = briefEnabled,
+                        onCheckedChange = { settingsViewModel.setBrief(context, it, briefTimeInput) }
+                    )
+                }
+            )
+            OutlinedTextField(
+                value = briefTimeInput,
+                onValueChange = { briefTimeInput = it },
+                label = { Text("Time (24-hour, e.g. 07:30)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                trailingIcon = {
+                    if (briefTimeInput != briefTime) {
+                        IconButton(onClick = { settingsViewModel.setBrief(context, briefEnabled, briefTimeInput) }) {
+                            Icon(Icons.Default.Done, contentDescription = "Save")
+                        }
+                    }
+                }
+            )
+
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("Laptop", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "For the Mark agent on your Windows laptop (same Wi-Fi). Give the laptop a fixed " +
+                    "address in your router so this keeps working. The MAC address lets Mark wake it up.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+            )
+
+            var laptopHost by remember(laptopConfig) { mutableStateOf(laptopConfig.host) }
+            var laptopToken by remember(laptopConfig) { mutableStateOf(laptopConfig.token) }
+            var laptopMac by remember(laptopConfig) { mutableStateOf(laptopConfig.mac) }
+
+            OutlinedTextField(
+                value = laptopHost,
+                onValueChange = { laptopHost = it },
+                label = { Text("Laptop IP address, e.g. 192.168.1.20") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            )
+            OutlinedTextField(
+                value = laptopToken,
+                onValueChange = { laptopToken = it },
+                label = { Text("Agent token") },
+                singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            )
+            OutlinedTextField(
+                value = laptopMac,
+                onValueChange = { laptopMac = it },
+                label = { Text("MAC address (optional, for wake-up)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { settingsViewModel.saveLaptop(laptopHost, laptopToken, laptopMac) }) {
+                    Text("Save")
+                }
+                OutlinedButton(onClick = {
+                    settingsViewModel.saveLaptop(laptopHost, laptopToken, laptopMac)
+                    settingsViewModel.testLaptop()
+                }) { Text("Test connection") }
+            }
+            laptopStatus?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 8.dp))
+            }
 
             HorizontalDivider()
             Spacer(Modifier.height(12.dp))

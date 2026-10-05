@@ -21,7 +21,7 @@ import kotlinx.coroutines.tasks.await
  */
 class ChatHistoryRepository(
     private val auth: AuthRepository = AuthRepository.instance
-) {
+) : ChatHistoryStore {
 
     private val db = FirebaseFirestore.getInstance()
 
@@ -56,7 +56,7 @@ class ChatHistoryRepository(
      * Used when building a request for the LLM to provide context without downloading
      * the entire history.
      */
-    suspend fun recent(limit: Int): List<Message> {
+    override suspend fun recent(limit: Int): List<Message> {
         val snapshot = collection()
             .orderBy("createdAt", Query.Direction.DESCENDING)
             .limit(limit.toLong())
@@ -76,17 +76,20 @@ class ChatHistoryRepository(
      * error between the tool call and the final reply — must leave no trace, or
      * the model reads the orphaned tool call on the next turn and fires it again.
      */
-    suspend fun appendAll(messages: List<Message>) {
+    override suspend fun appendAll(messages: List<Message>) {
         if (messages.isEmpty()) return
         val collection = collection()
         val batch = db.batch()
         messages.forEach { message ->
             batch.set(collection.document(message.id), message.toFirestore())
         }
-        batch.commit().await()
+        // Not awaited: commit() applies locally and queues durably at once, but
+        // its Task only completes on the server's ack, never while offline, and
+        // waiting held every later turn back in memory.
+        batch.commit().addOnFailureListener { android.util.Log.w("MarkHistory", "history write failed", it) }
     }
 
-    suspend fun clear() {
+    override suspend fun clear() {
         val snapshot = collection().get().await()
         // A Firestore batch holds at most 500 writes; a long history needs several.
         snapshot.documents.chunked(MAX_BATCH_WRITES).forEach { chunk ->
@@ -96,16 +99,19 @@ class ChatHistoryRepository(
         }
     }
 
-    private fun DocumentSnapshot.toMessage(): Message? = Message(
-        id = id,
-        role = getString("role") ?: return null,
-        content = getString("content"),
-        toolCallsJson = getString("toolCalls"),
-        toolCallId = getString("toolCallId"),
-        name = getString("name"),
-        isToolReply = getBoolean("isToolReply") ?: false,
-        createdAt = getLong("createdAt") ?: 0L
-    )
+    private fun DocumentSnapshot.toMessage(): Message? {
+        val role = getString("role") ?: return null
+        return Message(
+            id = id,
+            role = role,
+            content = getString("content"),
+            toolCallsJson = getString("toolCalls"),
+            toolCallId = getString("toolCallId"),
+            name = getString("name"),
+            isToolReply = getBoolean("isToolReply") ?: false,
+            createdAt = getLong("createdAt") ?: 0L
+        )
+    }
 
     private fun Message.toFirestore(): Map<String, Any?> = hashMapOf(
         "role" to role,

@@ -55,10 +55,15 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     private var sendJob: Job? = null
     private var streamJob: Job? = null
     private var consecutiveSilences = 0
+    /** Non-silence recognizer errors in a row ("Network error."), so they cannot loop forever. */
+    private var consecutiveErrors = 0
+    /** Set when the user said goodbye: end once the goodbye has been spoken. */
+    private var endAfterSpeaking = false
     private val restartTimes = mutableListOf<Long>()
     private var proactiveSpokenThisSession = false
     private var lastBatteryLevel = -1
     private var batteryHysteresis = false
+    private var criticalBatterySpoken = false
 
     // Registered on the application context, so it outlives this ViewModel
     // unless unregistered in onCleared(). Declared above init, which assigns it.
@@ -80,8 +85,13 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
 
                 // Automate flow: restart listening after speaking finishes
                 if (wasSpeaking && !speaking && !starting) {
-                    android.util.Log.d("MarkSession", "auto-restart (after speaking)")
-                    startListening()
+                    if (endAfterSpeaking) {
+                        endAfterSpeaking = false
+                        endSession("END_SESSION")
+                    } else {
+                        android.util.Log.d("MarkSession", "auto-restart (after speaking)")
+                        startListening()
+                    }
                 }
             }
         }
@@ -114,9 +124,9 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
         if (today != lastBrief && hour in 5..11) {
             viewModelScope.launch {
                 val brief = buildMorningBrief()
-                prefs.edit().putString("lastBriefDate", today).apply()
                 android.util.Log.d("MarkBrief", "playing morning brief")
-                speakProactive(brief)
+                // Only a brief that was actually spoken counts as today's brief.
+                if (speakProactive(brief)) prefs.edit().putString("lastBriefDate", today).apply()
             }
             return true
         }
@@ -138,9 +148,15 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
             briefParts.add("${cache.tempCelsius} degrees outside, ${cache.conditionShort}")
         }
 
-        val nextEvent = fetchNextCalendarEvent()
-        if (nextEvent != null) briefParts.add(nextEvent)
-        else briefParts.add("Aaj koi event nahi hai")
+        // Say "no events" only when the calendar could actually be read;
+        // without permission it used to claim an empty day every morning.
+        val calendarReadable = canReadCalendar()
+        val nextEvent = if (calendarReadable) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { fetchNextCalendarEvent() }.getOrNull()
+            }
+        } else null
+        if (calendarReadable) briefParts.add(nextEvent ?: "Aaj koi event nahi hai")
 
         val battery = getBatteryLevel()
         if (battery < 40) briefParts.add("Battery $battery percent")
@@ -200,21 +216,33 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
         if (pct == lastBatteryLevel) return
         lastBatteryLevel = pct
         if (pct > 25) batteryHysteresis = false
-        if (pct <= 5 && !proactiveSpokenThisSession) speakProactive("Sir, battery bahut kam hai.")
-        else if (pct <= 15 && !batteryHysteresis && !proactiveSpokenThisSession) {
+        // The critical warning is allowed even after another proactive line.
+        if (pct <= 5 && !criticalBatterySpoken) {
+            if (speakProactive("Sir, battery bahut kam hai, sirf $pct percent.", critical = true)) criticalBatterySpoken = true
+        } else if (pct in 6..15 && !batteryHysteresis && !proactiveSpokenThisSession) {
             batteryHysteresis = true
-            speakProactive("Sir, battery pandrah percent hai.")
+            speakProactive("Sir, battery $pct percent hai.")
         }
     }
 
-    private fun speakProactive(text: String) {
-        if (_uiState.value.isListening || _uiState.value.isLoading || proactiveSpokenThisSession) return
+    /** @return true if the line was actually spoken. */
+    private fun speakProactive(text: String, critical: Boolean = false): Boolean {
+        // tts.isSpeaking, not the UI copy: at launch the greeting has been queued
+        // but the UI state has not caught up, and a sticky battery broadcast
+        // used to cut the greeting off mid-word.
+        if (_uiState.value.isListening || _uiState.value.isLoading || tts.isSpeaking.value) return false
+        if (proactiveSpokenThisSession && !critical) return false
         proactiveSpokenThisSession = true
         tts.speak(text)
+        return true
     }
 
+    private fun canReadCalendar(): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_CALENDAR) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     private fun fetchNextCalendarEvent(): String? {
-        if (androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_CALENDAR) != android.content.pm.PackageManager.PERMISSION_GRANTED) return null
+        if (!canReadCalendar()) return null
 
         val now = System.currentTimeMillis()
         val endOfDay = java.util.Calendar.getInstance().apply {
@@ -233,8 +261,9 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
             if (cursor.moveToFirst()) {
                 val title = cursor.getString(0)
                 val start = cursor.getLong(1)
-                val time = java.text.SimpleDateFormat("h baje", java.util.Locale.getDefault()).format(java.util.Date(start))
-                "$title $time hai"
+                // "h baje" as one pattern threw: 'b' is not a valid pattern letter.
+                val hour = java.text.SimpleDateFormat("h", java.util.Locale.getDefault()).format(java.util.Date(start))
+                "$title $hour baje hai"
             } else null
         }
     }
@@ -310,16 +339,19 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                     android.util.Log.d("MarkGreet", "mic-ready in ${System.currentTimeMillis() - tStart}ms")
                 },
                 onPartial = { },
-                onResult = { finalText -> consecutiveSilences = 0; send(finalText) },
+                onResult = { finalText -> consecutiveSilences = 0; consecutiveErrors = 0; send(finalText) },
                 onError = { message ->
                     if (message.contains("Didn't catch that") || message.contains("No speech detected")) {
                         consecutiveSilences++
                         if (consecutiveSilences >= 2) endSession("silence")
                         else { starting = false; startListening() }
                     } else {
+                        // Spoken, then the mic reopens when speech ends; a persistent
+                        // error ("Network error.") used to repeat until tapped.
+                        consecutiveErrors++
                         _uiState.update { it.copy(errorMessage = null) }
-                        tts.speak(message)
                         starting = false
+                        if (consecutiveErrors >= 2) endSession("errors") else tts.speak(message)
                     }
                 },
                 onDone = { _uiState.update { it.copy(isListening = false) }; _amplitude.value = 0f; starting = false },
@@ -333,9 +365,13 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     private fun endSession(reason: String) {
         android.util.Log.d("MarkSession", "ended ($reason)")
         app.lastSessionEndTime = System.currentTimeMillis()
-        speech.stopListening()
+        // cancel, not stop: a stop yields a late "Didn't catch that." that
+        // counted as a silence and reopened the mic after the session ended.
+        speech.cancel()
         _uiState.update { it.copy(isListening = false, isPreparing = false, isLoading = false, isSpeaking = false) }
         consecutiveSilences = 0
+        consecutiveErrors = 0
+        endAfterSpeaking = false
         starting = false
         proactiveSpokenThisSession = false
         viewModelScope.launch { assistant.clearConversation() }
@@ -359,9 +395,13 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                         _uiState.update { it.copy(isLoading = false, streamingReply = fullReply) }
                         if (currentMode == ReplyMode.SPEAK) { tts.speakStream(event.content); startReplyStreaming(fullReply) }
                     }
+                    is com.example.mark.assistant.AssistantEvent.EndSession -> endAfterSpeaking = true
+                    // Spoken only (trailing space completes the sentence for TTS); not part of the reply.
+                    is com.example.mark.assistant.AssistantEvent.Filler -> tts.speakStream(event.content + " ")
                     is com.example.mark.assistant.AssistantEvent.Error -> {
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
-                        tts.speak(event.throwable.message ?: "Error")
+                        // Never read raw exception text aloud.
+                        tts.speak(spokenError(event.throwable))
                     }
                     is com.example.mark.assistant.AssistantEvent.Done -> {
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
@@ -375,17 +415,27 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                         if (fullReply.isNotBlank()) {
                             _messages.update { it + Message(role = "assistant", content = fullReply) }
                             if (currentMode == ReplyMode.SPEAK) tts.finalizeStream()
+                            else if (endAfterSpeaking) { fireDoubleHaptic(); endSession("END_SESSION") }
                             else { fireDoubleHaptic(); android.util.Log.d("MarkSession", "auto-restart (after silent confirm)"); startListening() }
-
-                            if (fullReply.contains("Theek hai sir", ignoreCase = true) ||
-                                fullReply.contains("Good night sir", ignoreCase = true) ||
-                                fullReply.contains("As you wish", ignoreCase = true)) {
-                                viewModelScope.launch { delay(1500); endSession("END_SESSION") }
-                            }
+                            // A spoken goodbye ends the session when speech finishes (see the
+                            // isSpeaking collector). This used to match reply text against
+                            // three phrases, which missed most goodbyes and fired on any LLM
+                            // reply that happened to contain "As you wish".
+                        } else if (endAfterSpeaking) {
+                            endSession("END_SESSION")
                         }
                     }
                 }
             }
+        }
+    }
+
+    private fun spokenError(t: Throwable): String {
+        val msg = t.message.orEmpty()
+        return when {
+            "API key" in msg -> "Sir, my online brain isn't set up yet."
+            t is java.io.IOException -> "Sir, I can't reach the internet right now."
+            else -> "Sorry sir, something went wrong."
         }
     }
 
@@ -432,7 +482,7 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     override fun onCleared() {
         batteryReceiver?.let { runCatching { app.unregisterReceiver(it) } }
         batteryReceiver = null
-        speech.stopListening()
+        speech.cancel()
         tts.stop()
         super.onCleared()
     }

@@ -2,10 +2,18 @@ package com.example.mark.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.mark.assistant.MarkAssistant
+import com.example.mark.assistant.ToolRequest
+import com.example.mark.assistant.ToolResult
+import com.example.mark.tools.LaptopTool
+import com.example.mark.model.MemoryFact
+import com.example.mark.repository.MemoryStore
 import com.example.mark.repository.SettingsRepository
 import com.example.mark.utils.TextToSpeechManager
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -14,8 +22,89 @@ import kotlinx.coroutines.launch
  */
 class SettingsViewModel(
     private val repository: SettingsRepository,
-    val ttsManager: TextToSpeechManager
+    val ttsManager: TextToSpeechManager,
+    private val memory: MemoryStore? = null,
+    private val laptop: LaptopTool? = null
 ) : ViewModel() {
+
+    // ---- Privacy ----
+
+    val shareSchedule: StateFlow<Boolean> = repository.shareSchedule
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setShareSchedule(enabled: Boolean) = viewModelScope.launch {
+        repository.setShareSchedule(enabled)
+        MarkAssistant.refreshSituation()
+    }
+
+    // ---- Messages ----
+
+    val announceMessages: StateFlow<Boolean> = repository.announceMessages
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setAnnounceMessages(enabled: Boolean) = viewModelScope.launch { repository.setAnnounceMessages(enabled) }
+
+    // ---- Morning brief ----
+
+    val briefEnabled: StateFlow<Boolean> = repository.briefEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val briefTime: StateFlow<String> = repository.briefTime
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "07:30")
+
+    /** Saves and re-arms the daily alarm; [time] must be HH:mm. */
+    fun setBrief(context: android.content.Context, enabled: Boolean, time: String) = viewModelScope.launch {
+        val valid = runCatching { java.time.LocalTime.parse(time) }.isSuccess
+        repository.setBrief(enabled, if (valid) time else briefTime.value)
+        com.example.mark.brief.MorningBrief.schedule(context.applicationContext)
+    }
+
+    // ---- Laptop ----
+
+    private val _laptopConfig = MutableStateFlow(laptop?.config() ?: LaptopTool.Config("", "", ""))
+    val laptopConfig: StateFlow<LaptopTool.Config> = _laptopConfig.asStateFlow()
+
+    private val _laptopStatus = MutableStateFlow<String?>(null)
+    /** Result of the last "Test connection", shown under the laptop fields. */
+    val laptopStatus: StateFlow<String?> = _laptopStatus.asStateFlow()
+
+    fun saveLaptop(host: String, token: String, mac: String) {
+        val tool = laptop ?: return
+        tool.configure(host, token, mac)
+        _laptopConfig.value = tool.config()
+        _laptopStatus.value = null
+    }
+
+    fun testLaptop() = viewModelScope.launch {
+        val tool = laptop ?: return@launch
+        _laptopStatus.value = "Checking…"
+        val result = tool.execute(ToolRequest.of(mapOf("action" to "status")))
+        _laptopStatus.value = if (result is ToolResult.Failure) result.text else "Laptop online, sir. ${result.text}"
+    }
+
+    /** What Mark should call the user. */
+    val userName: StateFlow<String> = repository.userName
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    fun setUserName(name: String) = viewModelScope.launch {
+        repository.setUserName(name)
+        MarkAssistant.refreshSituation()
+    }
+
+    private val _facts = MutableStateFlow<List<MemoryFact>>(emptyList())
+
+    /** Everything Mark has been asked to remember, newest first. */
+    val facts: StateFlow<List<MemoryFact>> = _facts.asStateFlow()
+
+    fun refreshFacts() = viewModelScope.launch {
+        val store = memory ?: return@launch
+        _facts.value = runCatching { store.all() }.getOrDefault(emptyList()).sortedByDescending { it.createdAt }
+    }
+
+    fun forget(fact: MemoryFact) = viewModelScope.launch {
+        val store = memory ?: return@launch
+        runCatching { store.remove(setOf(fact.id)) }
+        refreshFacts()
+    }
 
     /**
      * StateFlow representing the user's dark mode preference.

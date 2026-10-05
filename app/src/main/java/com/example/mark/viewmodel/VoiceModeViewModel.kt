@@ -43,17 +43,52 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
     /** Two consecutive silences end the session, rather than spinning forever. */
     private var consecutiveSilences = 0
 
+    /** Set when the user said goodbye: end once the goodbye has been spoken. */
+    private var endAfterSpeaking = false
+
     fun start() {
         if (_state.value.active) return
         assistant.stop()
         tts.stop()
         _state.value = VoiceModeState(active = true)
         consecutiveSilences = 0
+        endAfterSpeaking = false
+        if (!hasMicPermission()) {
+            // Used to start listening anyway; every attempt then failed as
+            // "silence" and voice mode quietly closed itself.
+            _state.update { it.copy(phase = VoicePhase.IDLE, errorMessage = "I need microphone permission, sir.") }
+            return
+        }
         listen()
     }
 
+    /**
+     * Orb tap. While Mark is thinking or talking it cuts him off and listens
+     * again (it used to close voice mode); otherwise it ends the session.
+     */
+    fun orbTapped() {
+        val phase = _state.value.phase
+        if (_state.value.active && (phase == VoicePhase.SPEAKING || phase == VoicePhase.THINKING)) {
+            // Leave SPEAKING first, so tts.stop() is not mistaken for "finished
+            // speaking" and the mic is not opened twice.
+            _state.update { it.copy(phase = VoicePhase.LISTENING) }
+            sendJob?.cancel()
+            assistant.stop()
+            tts.stop()
+            consecutiveSilences = 0
+            endAfterSpeaking = false
+            listen()
+        } else {
+            stop()
+        }
+    }
+
+    private fun hasMicPermission(): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(app, android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     fun stop() {
-        speech.stopListening()
+        speech.cancel()
         tts.stop()
         _state.value = VoiceModeState(active = false)
     }
@@ -94,23 +129,34 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
             var fullReply = ""
+            // Anything handed to the TTS stream (a filler counts) must be closed
+            // on every ending, or isSpeaking stays up and music stays ducked.
+            var streamed = false
             assistant.send(text).collect { event ->
                 when (event) {
                     is AssistantEvent.Text -> {
                         fullReply += event.content
                         _state.update { it.copy(lastReply = fullReply) }
+                        streamed = true
                         tts.speakStream(event.content)
                     }
+                    is AssistantEvent.EndSession -> endAfterSpeaking = true
+                    // Spoken only (trailing space completes the sentence for TTS); not part of the reply.
+                    is AssistantEvent.Filler -> { streamed = true; tts.speakStream(event.content + " ") }
                     is AssistantEvent.Error -> {
+                        // Cut any filler or partial answer; the error is shown instead.
+                        if (streamed) { tts.stop(); streamed = false }
                         val msg = event.throwable.message ?: "Something went wrong."
                         _state.update { it.copy(phase = VoicePhase.IDLE, errorMessage = msg) }
                         delay(1500)
                         if (_state.value.active) listen()
                     }
                     is AssistantEvent.Done -> {
-                        if (fullReply.isNotBlank()) {
+                        if (streamed) {
                             tts.finalizeStream()
                             // phase flips in the TTS callback
+                        } else if (endAfterSpeaking) {
+                            stop()
                         } else if (_state.value.active) {
                             listen()
                         }
@@ -122,6 +168,10 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun onSpeakingFinished() {
         if (!_state.value.active) return
+        if (endAfterSpeaking) {
+            stop()
+            return
+        }
         viewModelScope.launch {
             // The TTS engine holds audio focus for a moment after it stops.
             // Opening the mic too early makes Mark hear his own voice.
@@ -144,10 +194,8 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
-        speech.stopListening()
+        speech.cancel()
         tts.stop()
         super.onCleared()
     }
-
-    private fun String.stripMarkdown() = replace(Regex("[*_`#]"), "")
 }

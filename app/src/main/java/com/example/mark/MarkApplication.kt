@@ -6,7 +6,11 @@ import com.example.mark.health.HealthConnectProvider
 import com.example.mark.repository.SettingsRepository
 import com.example.mark.repository.ContactRepository
 import com.example.mark.tool.*
+import com.example.mark.reminder.AndroidReminders
+import com.example.mark.tools.CancelReminderTool
 import com.example.mark.tools.HomeTool
+import com.example.mark.tools.ListRemindersTool
+import com.example.mark.tools.SetReminderTool
 import com.example.mark.tools.SleepTool
 import com.example.mark.tools.StepsTool
 import com.example.mark.utils.SpeechRecognizerHelper
@@ -33,6 +37,10 @@ class MarkApplication : Application() {
 
         // Warm up ContactRepository and OpenAppTool on Dispatchers.IO
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            // Daily brief alarm and today's meeting heads-ups (alarms do not survive
+            // force-stops, and meetings may have been added since the last brief).
+            runCatching { com.example.mark.brief.MorningBrief.schedule(applicationContext) }
+            runCatching { com.example.mark.brief.MorningBrief.refreshHeadsUps(applicationContext) }
             ContactRepository.getInstance(applicationContext).tryRefresh()
             // OpenAppTool is a singleton accessed via MarkAssistant, 
             // and it pre-warms its cache in its init block.
@@ -40,6 +48,7 @@ class MarkApplication : Application() {
         }
 
         // Initialize the shared AssistantController with phone-specific tools
+        val reminders = AndroidReminders(this)
         MarkAssistant.get(
             this,
             extraTools = listOf(
@@ -47,6 +56,8 @@ class MarkApplication : Application() {
                 SleepTool(healthProvider),
                 HomeTool(this),
                 ReadNotificationsTool(this),
+                ReadConversationTool(this),
+                ReplyMessageTool(this),
                 ReadLastMessageTool(this),
                 CheckNewMessagesTool(this),
                 UnreadCountTool(this),
@@ -57,7 +68,10 @@ class MarkApplication : Application() {
                 CallTool(this),
                 CallExecuteTool(this),
                 SmsTool(this),
-                SmsExecuteTool(this)
+                SmsExecuteTool(this),
+                SetReminderTool(reminders),
+                ListRemindersTool(reminders),
+                CancelReminderTool(reminders)
             )
         )
     }

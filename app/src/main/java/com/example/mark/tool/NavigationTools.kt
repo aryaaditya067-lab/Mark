@@ -3,12 +3,10 @@ package com.example.mark.tool
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.example.mark.assistant.PhoneToolSchemas
 import com.example.mark.assistant.Tool
 import com.example.mark.assistant.ToolRequest
 import com.example.mark.assistant.ToolResult
-import com.example.mark.network.FunctionDef
-import com.example.mark.network.Parameters
-import com.example.mark.network.Property
 import com.example.mark.router.IntentType
 import com.example.mark.repository.SettingsRepository
 import kotlinx.coroutines.flow.first
@@ -16,16 +14,7 @@ import kotlinx.coroutines.flow.first
 class NavigateToTool(private val context: Context) : Tool {
     override val name = "navigate_to"
     override val intent = IntentType.NAVIGATE_TO
-    override val definition = FunctionDef(
-        name = name,
-        description = "Start turn-by-turn navigation to a destination.",
-        parameters = Parameters(
-            properties = mapOf(
-                "destination" to Property("string", "The destination address or place name")
-            ),
-            required = listOf("destination")
-        )
-    )
+    override val definition = PhoneToolSchemas.NAVIGATE_TO
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         val rawDest = request.string("destination") ?: return ToolResult.Failure("Where do you want to go?", reason = "missing_arg")
@@ -74,16 +63,7 @@ class NavigateToTool(private val context: Context) : Tool {
 class GetDistanceTool(private val context: Context) : Tool {
     override val name = "get_distance"
     override val intent = IntentType.GET_DISTANCE
-    override val definition = FunctionDef(
-        name = name,
-        description = "Check the distance or travel time to a destination.",
-        parameters = Parameters(
-            properties = mapOf(
-                "destination" to Property("string", "The destination address or place name")
-            ),
-            required = listOf("destination")
-        )
-    )
+    override val definition = PhoneToolSchemas.GET_DISTANCE
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         val rawDest = request.string("destination") ?: return ToolResult.Failure("Tell me the destination.", reason = "missing_arg")
@@ -114,16 +94,7 @@ class GetDistanceTool(private val context: Context) : Tool {
 class FindNearbyTool(private val context: Context) : Tool {
     override val name = "find_nearby"
     override val intent = IntentType.FIND_NEARBY
-    override val definition = FunctionDef(
-        name = name,
-        description = "Find nearby places like ATMs, restaurants, or gas stations.",
-        parameters = Parameters(
-            properties = mapOf(
-                "placeType" to Property("string", "The type of place to find (e.g., ATM, restaurant)")
-            ),
-            required = listOf("placeType")
-        )
-    )
+    override val definition = PhoneToolSchemas.FIND_NEARBY
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         val placeType = request.string("placeType") ?: return ToolResult.Failure("What are you looking for nearby?", reason = "missing_arg")

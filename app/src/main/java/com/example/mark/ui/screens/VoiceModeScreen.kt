@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -40,6 +41,13 @@ fun VoiceModeScreen(
 
     DisposableEffect(Unit) {
         onDispose { viewModel.stop() }
+    }
+
+    // A hands-free conversation must not be cut off by the screen timeout.
+    val view = LocalView.current
+    DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
     }
 
     val orbState = when (state.phase) {
@@ -91,12 +99,12 @@ fun VoiceModeScreen(
                     .offset(y = (-24).dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Tap the orb to cancel listening / end the session — same
-                // gesture as the watch.
+                // Tap the orb to interrupt Mark while he thinks or speaks, or to
+                // end the session while he listens. The X button always exits.
                 VoiceOrb(
                     state = orbState,
                     amplitude = state.amplitude,
-                    onClick = { viewModel.stop(); onExit() },
+                    onClick = { viewModel.orbTapped() },
                     size = 240.dp
                 )
 

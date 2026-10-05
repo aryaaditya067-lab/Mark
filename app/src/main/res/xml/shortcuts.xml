@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the Mark icon: straight into voice mode. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="talk"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/talk_to_mark">
+        <intent
+            android:action="android.intent.action.VOICE_COMMAND"
+            android:targetPackage="com.example.mark"
+            android:targetClass="com.example.mark.MainActivity" />
+    </shortcut>
+</shortcuts>

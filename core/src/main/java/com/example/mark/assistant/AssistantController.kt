@@ -5,6 +5,9 @@ import com.example.mark.model.CommandResult
 import com.example.mark.model.Message
 import com.example.mark.network.*
 import com.example.mark.repository.ChatHistoryRepository
+import com.example.mark.repository.ChatHistoryStore
+import com.example.mark.repository.MemoryFacts
+import com.example.mark.repository.MemoryStore
 import com.example.mark.router.IntentRouter
 import com.example.mark.router.IntentType
 import com.example.mark.router.ReplyMode
@@ -15,6 +18,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.withLock
 import java.lang.reflect.Type
 import java.util.UUID
 
@@ -25,9 +29,11 @@ class AssistantController(
     private val toolManager: ToolManager,
     private val router: IntentRouter = IntentRouter(),
     private val api: LlmApiService = RetrofitClient.llmApi,
-    private val historyProvider: () -> ChatHistoryRepository? = { ChatHistoryRepository.instance },
+    private val historyProvider: () -> ChatHistoryStore? = { ChatHistoryRepository.instance },
     private val isWatch: Boolean = false,
     private val transport: CommandTransport? = null,
+    private val memory: MemoryStore? = null,
+    private val situation: SituationProvider? = null,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) {
 
@@ -35,14 +41,43 @@ class AssistantController(
     private val toolCallListType = object : TypeToken<List<ToolCall>>() {}.type
 
     private val watchSessionHistory = mutableListOf<Message>()
+
+    /**
+     * Phone: the recent history, read from the store once and then kept in step
+     * locally. Turns used to await a Firestore read before every LLM call and a
+     * Firestore write before every reply; now neither waits on the network.
+     */
+    private var historyCache: MutableList<Message>? = null
+    private val historyLock = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * Writes go out one batch at a time, in order, off the reply path. Each is
+     * tagged with the clear-generation it was made in, so turns queued before a
+     * Clear are dropped instead of re-added afterwards.
+     */
+    private val historyWrites = kotlinx.coroutines.channels.Channel<Pair<Int, List<Message>>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+    @Volatile private var historyGeneration = 0
+
+    init {
+        if (!isWatch) scope.launch {
+            for ((generation, batch) in historyWrites) {
+                if (generation == historyGeneration) runCatching { historyProvider()?.appendAll(batch) }
+            }
+        }
+    }
     private var currentTurn: Job? = null
     private var lastSpokenReply: String? = null
+    private var endSessionRequested = false
 
     private data class AwaitingConfirmation(
         val intent: com.example.mark.router.Intent,
         val expiresAt: Long
     )
     private var awaitingConfirmation: AwaitingConfirmation? = null
+
+    /** The action parked by the LLM during the current turn, asked about when the turn ends. */
+    @Volatile private var parkedThisTurn: com.example.mark.router.Intent? = null
+    private val parkLock = Any()
 
     private data class IntentContext(
         val intent: IntentType,
@@ -72,13 +107,26 @@ class AssistantController(
 
         private const val WATCH_HISTORY_CAP = 4 * Constants.MAX_HISTORY_MESSAGES
 
+        /** Tool rounds per question before the model must answer in words. */
+        private const val MAX_TOOL_ROUNDS = 5
+
+        private val MARKDOWN_SYMBOLS = Regex("[*#`]")
+
+        private const val MEMORY_TIMEOUT_MS = 1500L
+
+        /** History kept in memory on the phone; the LLM window is taken from its tail. */
+        private const val HISTORY_CACHE_SIZE = 4 * Constants.MAX_HISTORY_MESSAGES
+
         // Intents that ALWAYS run on the phone when spoken from the watch.
         private val ALWAYS_REMOTE = setOf(
             IntentType.TOGGLE_FLASHLIGHT, IntentType.SET_DND, IntentType.GET_CALENDAR, IntentType.RING_PHONE,
             IntentType.SET_ROTATE, IntentType.MEDIA_CONTROL, IntentType.READ_NOTIFICATIONS, IntentType.READ_LAST_MESSAGE,
             IntentType.CHECK_NEW_MESSAGES, IntentType.UNREAD_COUNT, IntentType.NAVIGATE_TO, IntentType.GET_DISTANCE,
             IntentType.FIND_NEARBY, IntentType.TAKE_SCREENSHOT, IntentType.CALL_CONTACT, IntentType.CALL_EXECUTE,
-            IntentType.SEND_SMS, IntentType.SMS_EXECUTE, IntentType.GO_HOME, IntentType.LAPTOP_CONTROL
+            IntentType.SEND_SMS, IntentType.SMS_EXECUTE, IntentType.GO_HOME, IntentType.LAPTOP_CONTROL,
+            // Reminders are scheduled and fire on the phone; the watch gets them as notifications.
+            IntentType.SET_REMINDER, IntentType.LIST_REMINDERS, IntentType.CANCEL_REMINDER,
+            IntentType.READ_CONVERSATION, IntentType.REPLY_MESSAGE
         )
 
         // Intents that run on the phone UNLESS the user said "watch pe ...".
@@ -96,14 +144,77 @@ class AssistantController(
         currentTurn = null
     }
 
+    /**
+     * A bare "haan" / "okay" / "nahi" only means something offline while a
+     * confirmation is pending. Otherwise it is an answer to whatever the LLM
+     * last asked ("Shall I set it for 7?") or just conversation ("okay thanks"),
+     * so it goes to the LLM instead of getting "For what, sir?".
+     */
+    private fun route(text: String): RoutingDecision {
+        val decision = router.route(text)
+        if (decision is RoutingDecision.Offline &&
+            decision.intent.type == IntentType.CONFIRMATION &&
+            !hasPendingConfirmation()
+        ) return RoutingDecision.Online
+        return decision
+    }
+
+    private fun hasPendingConfirmation(): Boolean =
+        awaitingConfirmation?.let { System.currentTimeMillis() <= it.expiresAt } == true
+
+    /** On the watch, these intents act on the phone (the torch, calls, apps...). */
+    private fun runsOnPhone(type: IntentType, params: Map<String, String>): Boolean =
+        isWatch && transport != null && (
+            type in ALWAYS_REMOTE ||
+                (type in REMOTE_UNLESS_WATCH_TARGET && params["target"] != "watch")
+            )
+
+    /**
+     * How long to wait for the phone. 5 s suits phone actions, but the laptop
+     * agent alone may take 6 s, and waking the laptop waits up to 30 s, so
+     * those used to time out on the watch while actually succeeding.
+     */
+    private fun remoteTimeoutMs(type: IntentType, params: Map<String, String>): Long = when {
+        type == IntentType.LAPTOP_CONTROL && params["action"] == "wake" -> 40_000L
+        type == IntentType.LAPTOP_CONTROL -> 9_000L
+        else -> 5_000L
+    }
+
+    /** Runs an intent wherever it belongs: here, or on the phone over the Data Layer. */
+    private suspend fun executeAnywhere(type: IntentType, params: Map<String, String>, rawInput: String?): ToolResult =
+        if (runsOnPhone(type, params)) sendRemote(type, params + ("raw_input" to (rawInput ?: "")))
+        else toolManager.execute(type, params, rawInput)
+
     suspend fun send(userText: String): Flow<AssistantEvent> = flow {
         stop()
         currentTurn = currentCoroutineContext()[Job]
+        endSessionRequested = false
+        // A parked action may only be answered by the very next utterance. If
+        // the user moved on, drop it: otherwise an "okay" to something else a
+        // few seconds later would send the SMS or dial the number.
+        val raw = router.route(userText)
+        if (!(raw is RoutingDecision.Offline && raw.intent.type == IntentType.CONFIRMATION)) {
+            awaitingConfirmation = null
+        }
+        parkedThisTurn = null
 
         try {
-            val initialDecision = router.route(userText)
+            val initialDecision = route(userText)
             val isSms = initialDecision is RoutingDecision.Offline && initialDecision.intent.type == IntentType.SEND_SMS
             val segments = if (isSms) listOf(userText) else splitCompoundCommand(userText)
+
+            // A single question for the LLM streams straight through, so the
+            // first words are spoken while the rest is still being generated.
+            // (Compound commands are still collected and combined below.)
+            if (segments.size == 1 && route(segments[0]) is RoutingDecision.Online) {
+                var replied = false
+                handleOnlineStream(segments[0]).collect { event ->
+                    if (event is AssistantEvent.Text && event.content.isNotBlank()) replied = true
+                    emit(event)
+                }
+                if (!replied) emit(AssistantEvent.Text(Persona.notUnderstood(), ReplyMode.SPEAK))
+                return@flow
+            }
 
             val turnResults = mutableListOf<Triple<String, ReplyMode, Boolean>>()
 
@@ -141,6 +252,7 @@ class AssistantController(
                     emit(AssistantEvent.Text(combinedText.trim(), ReplyMode.SPEAK))
                 }
             }
+            if (endSessionRequested) emit(AssistantEvent.EndSession)
 
         } catch (e: CancellationException) {
             throw e
@@ -153,7 +265,7 @@ class AssistantController(
     }
 
     private suspend fun FlowCollector<AssistantEvent>.processTurn(userText: String): Triple<String, ReplyMode, Boolean>? {
-        val decision = router.route(userText)
+        val decision = route(userText)
 
         if (decision is RoutingDecision.Offline) {
             return performIntentExecution(decision.intent, userText)
@@ -227,16 +339,15 @@ class AssistantController(
         }
 
         // Remote Handling
-        val isRemote = isWatch && (
-                intent.type in ALWAYS_REMOTE ||
-                        (intent.type in REMOTE_UNLESS_WATCH_TARGET && intent.params["target"] != "watch")
-                )
+        val isRemote = runsOnPhone(intent.type, intent.params)
 
         if (isRemote && transport != null) {
             val commandId = UUID.randomUUID().toString()
             val command = Command(id = commandId, type = intent.type, params = intent.params + ("raw_input" to userText))
             if (transport.sendCommand(command)) {
-                val result = withTimeoutOrNull(5000) { transport.results.filter { it.commandId == commandId }.first() }
+                val result = withTimeoutOrNull(remoteTimeoutMs(intent.type, intent.params)) {
+                    transport.results.filter { it.commandId == commandId }.first()
+                }
                 if (result != null) {
                     if (intent.type == IntentType.CALL_CONTACT) {
                         handleCallResolution(result.data, result.text)
@@ -264,6 +375,16 @@ class AssistantController(
                     return Triple("Phone is taking too long to respond.", ReplyMode.SPEAK, false)
                 }
             } else return Triple("Failed to reach your phone.", ReplyMode.SPEAK, false)
+        } else if (intent.type == IntentType.CALL_CONTACT || intent.type == IntentType.SEND_SMS) {
+            // Spoken on the phone itself. These tools only RESOLVE the contact
+            // ("resolved" + name/number in data); the dial/send step and the
+            // confirmation live here. This used to fall through to handleOffline,
+            // which spoke the literal word "resolved" and never dialled.
+            val res = toolManager.execute(intent.type, intent.params, userText)
+            if (res is ToolResult.Failure) return Triple(res.text, ReplyMode.SPEAK, false)
+            if (intent.type == IntentType.CALL_CONTACT) handleCallResolution(res.data, res.text)
+            else handleSmsResolution(res.data, res.text)
+            return null
         } else if (intent.type in CONVERSATIONAL_INTENTS || toolManager.supports(intent.type)) {
             val (reply, mode) = handleOffline(userText, RoutingDecision.Offline(intent))
             return Triple(reply, mode, true)
@@ -317,6 +438,8 @@ class AssistantController(
             }
         }
 
+        if (intent.type == IntentType.END_SESSION) endSessionRequested = true
+
         val result = when (intent.type) {
             IntentType.GREETING, IntentType.END_SESSION, IntentType.EASTER_EGG, IntentType.REPEAT, IntentType.HELP -> ToolResult.Success(intent.type.name, intent.params)
             else -> toolManager.execute(intent.type, intent.params, userText)
@@ -337,64 +460,142 @@ class AssistantController(
         return reply to mode
     }
 
+    /**
+     * The LLM path. The model may call tools over several rounds — read the
+     * tasks, then set an alarm for the first one — so this loops until a round
+     * answers in plain text. Each round is streamed: text reaches the speaker
+     * as it arrives, and tool calls are reassembled from the stream rather
+     * than re-requested without streaming.
+     */
     private suspend fun handleOnlineStream(userText: String): Flow<AssistantEvent> = flow {
         // Read context BEFORE storing this turn's user message — otherwise the
         // window already contains it and the LLM sees the question twice.
-        val past = if (isWatch) watchSessionHistory.toList()
-        else runCatching { historyProvider()?.recent(Constants.MAX_HISTORY_MESSAGES) }.getOrNull() ?: emptyList()
+        val past = pastMessages()
         val stored = HistoryWindow.select(past, Constants.MAX_HISTORY_MESSAGES)
+        // Memory is a nice-to-have for a turn, never a reason to stall it.
+        val facts = memory?.let { store ->
+            withTimeoutOrNull(MEMORY_TIMEOUT_MS) { runCatching { store.all() }.getOrNull() }
+        }?.let(MemoryFacts::forPrompt).orEmpty()
+        val now = situation?.let { runCatching { it.snapshot() }.getOrNull() }.orEmpty()
         persist(Message(role = "user", content = userText))
         val messages = buildList {
-            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt()))
+            add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt(isWatch, facts, now)))
             addAll(stored.map { it.toLlmMessage() })
             add(LlmMessage(role = "user", content = userText))
         }.toMutableList()
 
-        var fullReply = ""
-        var hasToolCall = false
-        askStream(messages).collect { chunk ->
-            val choice = chunk.choices.firstOrNull() ?: return@collect
-            if (choice.delta.toolCalls != null) hasToolCall = true
-            choice.delta.content?.let { fullReply += it; emit(AssistantEvent.Text(it, ReplyMode.SPEAK)) }
-        }
-
-        if (fullReply.isNotBlank() && !hasToolCall) {
-            lastSpokenReply = fullReply
-            persist(Message(role = "assistant", content = fullReply))
-            return@flow
-        }
-
-        val response = ask(messages)
-        if (response.toolCalls.isNullOrEmpty()) {
-            val text = response.content?.trim() ?: ""
-            if (fullReply.isBlank() && text.isNotBlank()) { emit(AssistantEvent.Text(text, ReplyMode.SPEAK)); fullReply = text }
-            if (fullReply.isNotBlank()) { lastSpokenReply = fullReply; persist(Message(role = "assistant", content = fullReply)) }
-        } else {
-            val calls = response.toolCalls
-            val assistantMsg = Message(role = "assistant", content = response.content, toolCallsJson = gson.toJson(calls))
-            persist(assistantMsg)
-            messages.add(response)
-            val toolResults = mutableListOf<Message>()
-            for (call in calls) {
-                val result = toolManager.execute(call.function.name, call.function.arguments, userText)
-                val toolMsg = LlmMessage(role = "tool", toolCallId = call.id, name = call.function.name, content = result.text)
-                messages.add(toolMsg)
-                toolResults.add(Message(role = "tool", content = result.text, toolCallId = call.id, name = call.function.name))
+        var spoken = ""
+        for (round in 0..MAX_TOOL_ROUNDS) {
+            // The last round offers no tools, so the model has to answer.
+            val offerTools = round < MAX_TOOL_ROUNDS
+            val calls = ToolCallAccumulator()
+            var text = ""
+            askStream(messages, offerTools).collect { chunk ->
+                val delta = chunk.choices?.firstOrNull()?.delta ?: return@collect
+                calls.add(delta.toolCalls)
+                // Markdown symbols are read aloud literally by TTS ("asterisk").
+                // Single characters, so stripping per chunk is safe mid-stream.
+                delta.content?.replace(MARKDOWN_SYMBOLS, "")?.takeIf { it.isNotEmpty() }?.let {
+                    text += it
+                    emit(AssistantEvent.Text(it, ReplyMode.SPEAK))
+                }
             }
-            persist(toolResults)
-            var finalReply = ""
-            askStream(messages).collect { chunk -> chunk.choices.firstOrNull()?.delta?.content?.let { finalReply += it; emit(AssistantEvent.Text(it, ReplyMode.SPEAK)) } }
-            if (finalReply.isNotBlank()) { lastSpokenReply = finalReply; persist(Message(role = "assistant", content = finalReply)) }
+            spoken += text
+
+            val toolCalls = if (offerTools) calls.build() else emptyList()
+            if (toolCalls.isEmpty()) {
+                if (text.isNotBlank()) persist(Message(role = "assistant", content = text))
+                break
+            }
+            // Tools plus another model round take a few seconds; say so instead
+            // of going silent (once per turn, and only if nothing was said yet).
+            if (round == 0 && spoken.isBlank()) emit(AssistantEvent.Filler(Persona.thinking()))
+
+            val assistantMsg = LlmMessage(role = "assistant", content = text.ifBlank { null }, toolCalls = toolCalls)
+            messages.add(assistantMsg)
+            // Calls within one round are independent by construction (the model
+            // waits for results before making dependent calls), so run them together.
+            val results = coroutineScope {
+                toolCalls.map { call -> async { call to runLlmToolCall(call, userText) } }.awaitAll()
+            }
+            val roundMessages = mutableListOf(
+                Message(role = "assistant", content = assistantMsg.content, toolCallsJson = gson.toJson(toolCalls))
+            )
+            for ((call, result) in results) {
+                val content = toolResultContent(result)
+                messages.add(LlmMessage(role = "tool", toolCallId = call.id, name = call.function.name, content = content))
+                roundMessages.add(Message(role = "tool", content = content, toolCallId = call.id, name = call.function.name))
+            }
+            // One write per round: a call is never stored without its results.
+            persist(roundMessages)
         }
+        // The confirmation question comes from the parked action's real
+        // parameters, never from the model's wording.
+        parkedThisTurn?.let { pending ->
+            val question = ConfirmationText.question(pending)
+            emit(AssistantEvent.Text((if (spoken.isNotBlank()) " " else "") + question, ReplyMode.SPEAK))
+            spoken += " $question"
+            persist(Message(role = "assistant", content = question))
+        }
+        if (spoken.isNotBlank()) lastSpokenReply = spoken.trim()
     }
 
-    private suspend fun askStream(messages: List<LlmMessage>): Flow<LlmStreamResponse> = flow {
-        val responseBody = api.chatCompletionStream(authHeader = llmAuthHeader(), request = LlmRequest(model = Constants.MIMO_MODEL, messages = messages, tools = toolManager.definitions, stream = true))
-        responseBody.byteStream().bufferedReader().use { reader ->
+    /**
+     * One tool call chosen by the LLM. Calls with consequences are not run:
+     * they are parked as a pending confirmation and the model is told to ask,
+     * so the user's spoken "yes" executes them. On the watch, intents that
+     * belong to the phone are sent there, exactly as on the offline path.
+     */
+    private suspend fun runLlmToolCall(call: ToolCall, userText: String): ToolResult {
+        val name = call.function.name
+        val args = call.function.arguments
+        toolManager.confirmationFor(name, args)?.let { pending ->
+            val parked = synchronized(parkLock) {
+                if (parkedThisTurn != null) false
+                else {
+                    parkedThisTurn = pending
+                    awaitingConfirmation = AwaitingConfirmation(pending, System.currentTimeMillis() + 45000)
+                    true
+                }
+            }
+            return if (parked) ToolResult.Partial(
+                "Not done yet: waiting for the user's spoken yes. The app asks the confirmation question " +
+                    "itself right after your reply, so do not ask it or claim it is done.",
+                reason = "needs_confirmation"
+            ) else ToolResult.Failure(
+                "Not done: another action is already waiting for the user's confirmation. Only one at a " +
+                    "time; mention that this one can be done after.",
+                reason = "one_confirmation_at_a_time"
+            )
+        }
+        val intent = toolManager.intentOf(name)
+        if (intent != null) {
+            val params = toolManager.paramsOf(args)
+            if (runsOnPhone(intent, params)) return sendRemote(intent, params + ("raw_input" to userText))
+        }
+        return toolManager.execute(name, args, userText)
+    }
+
+    /** What the LLM reads back: the text, plus structured data (names, numbers) when there is any. */
+    private fun toolResultContent(result: ToolResult): String =
+        if (result.data.isEmpty()) result.text else "${result.text}\n${gson.toJson(result.data)}"
+
+    private suspend fun askStream(messages: List<LlmMessage>, offerTools: Boolean): Flow<LlmStreamResponse> = flow {
+        val request = LlmRequest(
+            model = Constants.MIMO_MODEL,
+            messages = messages,
+            tools = if (offerTools) toolManager.definitions else null,
+            stream = true
+        )
+        val responseBody = api.chatCompletionStream(authHeader = llmAuthHeader(), request = request)
+        // A blocking readLine() cannot be cancelled; closing the body can. So a
+        // barge-in or stop() ends the read at once instead of after the next chunk.
+        val closeOnCancel = currentCoroutineContext()[Job]?.invokeOnCompletion { runCatching { responseBody.close() } }
+        try { responseBody.byteStream().bufferedReader().use { reader ->
             while (true) {
                 val line = reader.readLine() ?: break
-                if (line.startsWith("data: ")) {
-                    val data = line.substring(6).trim()
+                if (line.startsWith("data:")) {
+                    val data = line.removePrefix("data:").trim()
                     if (data == "[DONE]") break
                     // Parse inside the try, emit outside it: emit() rethrows downstream
                     // failures and cancellation, which must not be swallowed here.
@@ -402,8 +603,8 @@ class AssistantController(
                     if (chunk != null) emit(chunk)
                 }
             }
-        }
-    }
+        } } finally { closeOnCancel?.dispose() }
+    }.flowOn(Dispatchers.IO) // the ViewModels collect on Main; blocking socket reads must not run there
 
     private fun llmAuthHeader(): String {
         check(Constants.MIMO_API_KEY.isNotBlank()) {
@@ -412,9 +613,17 @@ class AssistantController(
         return "Bearer ${Constants.MIMO_API_KEY}"
     }
 
-    private suspend fun ask(messages: List<LlmMessage>): LlmMessage {
-        val response = api.chatCompletion(authHeader = llmAuthHeader(), request = LlmRequest(model = Constants.MIMO_MODEL, messages = messages, tools = toolManager.definitions))
-        return response.choices?.firstOrNull()?.message ?: error("Empty response")
+    private suspend fun pastMessages(): List<Message> {
+        if (isWatch) return watchSessionHistory.toList()
+        return historyLock.withLock {
+            historyCache?.toList() ?: run {
+                // Not cached on failure (e.g. not signed in yet), so the next turn retries.
+                val loaded = runCatching { historyProvider()?.recent(HISTORY_CACHE_SIZE) }.getOrNull()
+                    ?: return@withLock emptyList()
+                historyCache = loaded.toMutableList()
+                loaded
+            }
+        }
     }
 
     private suspend fun persist(vararg messages: Message) = persist(messages.toList())
@@ -424,7 +633,16 @@ class AssistantController(
             // Only the tail is ever sent to the LLM; a long session must not grow forever.
             val overflow = watchSessionHistory.size - WATCH_HISTORY_CAP
             if (overflow > 0) watchSessionHistory.subList(0, overflow).clear()
-        } else runCatching { historyProvider()?.appendAll(messages) }
+        } else {
+            historyLock.withLock {
+                historyCache?.let { cache ->
+                    cache.addAll(messages)
+                    val overflow = cache.size - HISTORY_CACHE_SIZE
+                    if (overflow > 0) cache.subList(0, overflow).clear()
+                }
+            }
+            historyWrites.trySend(historyGeneration to messages)
+        }
     }
     private fun Message.toLlmMessage() = LlmMessage(role = role, content = content, toolCalls = toolCallsJson?.let { gson.fromJson(it, toolCallListType) }, toolCallId = toolCallId, name = name)
 
@@ -435,7 +653,11 @@ class AssistantController(
         lastIntentContext = null
         lastUndoInfo = null
         if (isWatch) watchSessionHistory.clear()
-        else historyProvider()?.clear()
+        else {
+            historyLock.withLock { historyCache = mutableListOf() }
+            historyGeneration++
+            historyProvider()?.clear()
+        }
     }
 
     suspend fun executeCommand(command: Command): CommandResult {
@@ -461,8 +683,8 @@ class AssistantController(
                 emit(AssistantEvent.Text("Calling $name.", ReplyMode.SPEAK))
                 val executeIntent = com.example.mark.router.Intent(IntentType.CALL_EXECUTE, mapOf("number" to number))
                 delay(2000)
-                val res = sendRemote(executeIntent.type, executeIntent.params)
-                if (res is ToolResult.Success) emit(AssistantEvent.Text(res.text, ReplyMode.SPEAK))
+                val res = executeAnywhere(executeIntent.type, executeIntent.params, null)
+                if (res is ToolResult.Failure) emit(AssistantEvent.Text(res.text, ReplyMode.SPEAK))
             }
             "confirmation_needed" -> {
                 emit(AssistantEvent.Text("Did you mean $name?", ReplyMode.SPEAK))
@@ -503,9 +725,15 @@ class AssistantController(
         val commandId = UUID.randomUUID().toString()
         val command = Command(id = commandId, type = type, params = params)
         if (transport.sendCommand(command)) {
-            val result = withTimeoutOrNull(5000) { transport.results.filter { it.commandId == commandId }.first() }
-            if (result != null) return ToolResult.Success(result.text, result.data)
+            val result = withTimeoutOrNull(remoteTimeoutMs(type, params)) {
+                transport.results.filter { it.commandId == commandId }.first()
+            }
+            if (result != null) {
+                return if (result.success) ToolResult.Success(result.text, result.data)
+                else ToolResult.Failure(result.text, reason = "remote_failure")
+            }
+            return ToolResult.Failure("Phone is taking too long to respond.", reason = "timeout")
         }
-        return ToolResult.Failure("Phone timeout", "timeout")
+        return ToolResult.Failure("Failed to reach your phone.", reason = "unreachable")
     }
 }

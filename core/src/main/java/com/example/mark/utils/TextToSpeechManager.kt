@@ -1,6 +1,8 @@
 package com.example.mark.utils
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -25,13 +27,30 @@ class TextToSpeechManager(context: Context) {
     private var pending: String? = null
     private var desiredVoiceName: String? = null
 
+    /** The offline voice picked at start-up; the fallback when an online voice can't be reached. */
+    @Volatile private var localVoice: Voice? = null
+
     private val _isSpeaking = MutableStateFlow(false)
+
+    /**
+     * True from the first queued utterance until the last one finishes AND the
+     * reply stream is closed. Tracking single utterances made this flicker to
+     * false between sentences of a streamed reply — and the watch treats that
+     * edge as "reply finished", restarts the mic and cuts the rest off.
+     */
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
 
+    private val inFlight = mutableSetOf<String>()
+    @Volatile private var streamOpen = false
+    private var utteranceCounter = 0
+
     private var buffer = ""
-    private val MIN_SENTENCE_LENGTH = 80 // characters
+    private var spokeThisStream = false
 
     private companion object {
+        const val FIRST_SENTENCE_LENGTH = 12
+        const val BATCH_SENTENCE_LENGTH = 80
+
         /**
          * Deterministic voice pick, most-wanted first. Google's voice names never
          * contain the word "male" — the variant code is the only reliable signal.
@@ -49,12 +68,36 @@ class TextToSpeechManager(context: Context) {
         )
     }
 
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    /** Spoken replies are assistant speech: music ducks under them instead of fighting them. */
+    private val speechAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+
+    private val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        .setAudioAttributes(speechAttributes)
+        .build()
+
+    @Volatile private var holdingFocus = false
+
+    /** The engine reported failure; nothing will ever be spoken, so nothing may wait on speech. */
+    @Volatile private var initFailed = false
+
     init {
         tts = TextToSpeech(context.applicationContext) { status ->
             ready = status == TextToSpeech.SUCCESS
+            if (!ready) {
+                initFailed = true
+                // Nothing will ever be spoken; never leave callers waiting on it.
+                synchronized(inFlight) { inFlight.clear(); streamOpen = false; buffer = "" }
+                _isSpeaking.value = false
+            }
             if (ready) {
                 tts?.setSpeechRate(0.90f)
                 tts?.setPitch(0.85f)
+                tts?.setAudioAttributes(speechAttributes)
 
                 val allVoices = tts?.voices
                 allVoices?.forEach {
@@ -79,6 +122,7 @@ class TextToSpeechManager(context: Context) {
                         .firstOrNull()
                 }
 
+                localVoice = selected
                 selected?.let {
                     tts?.voice = it
                     android.util.Log.d("MarkVoice", "SELECTED ${it.name}")
@@ -92,25 +136,31 @@ class TextToSpeechManager(context: Context) {
                     override fun onStart(utteranceId: String?) {
                         _isSpeaking.value = true
                     }
-                    override fun onDone(utteranceId: String?) {
-                        _isSpeaking.value = false
-                    }
+                    override fun onDone(utteranceId: String?) = finished(utteranceId)
                     @Deprecated("deprecated")
-                    override fun onError(utteranceId: String?) {
-                        _isSpeaking.value = false
-                    }
+                    override fun onError(utteranceId: String?) = finished(utteranceId)
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) = finished(utteranceId)
                 })
 
                 pending?.let { speak(it) }
                 pending = null
+                // Streamed text that arrived before the engine was ready.
+                val early = buffer.trim()
+                buffer = ""
+                if (early.isNotBlank()) enqueue(early, TextToSpeech.QUEUE_ADD)
+                settle()
             }
         }
     }
 
-    /** Local voices only — network voices stall on the watch's Bluetooth link. */
-    fun availableVoices(): List<Voice> =
+    /**
+     * English voices for the picker. Local ones always; online ("network")
+     * voices only when [includeOnline] — they sound more natural on the phone,
+     * but stall on the watch's Bluetooth link, so the watch never offers them.
+     */
+    fun availableVoices(includeOnline: Boolean = false): List<Voice> =
         tts?.voices
-            ?.filter { it.locale.language == "en" && it.name.endsWith("-local") }
+            ?.filter { it.locale.language == "en" && (it.name.endsWith("-local") || (includeOnline && it.name.endsWith("-network"))) }
             ?.sortedBy { it.name }
             .orEmpty()
 
@@ -125,6 +175,28 @@ class TextToSpeechManager(context: Context) {
     }
 
     /**
+     * An online voice with no network would go silent or stall, so speak with
+     * the offline voice until the network is back, then return to the choice.
+     */
+    private fun ensureUsableVoice() {
+        val engine = tts ?: return
+        val wanted = desiredVoiceName?.let { name -> engine.voices?.find { it.name == name } }
+        val target = when {
+            wanted == null -> return
+            !wanted.isNetworkConnectionRequired -> wanted
+            isOnline() -> wanted
+            else -> localVoice ?: return
+        }
+        if (engine.voice?.name != target.name) engine.voice = target
+    }
+
+    private fun isOnline(): Boolean {
+        val cm = appContext.getSystemService(android.net.ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    /**
      * Speaks the given text out loud.
      */
     fun speak(text: String) {
@@ -134,12 +206,13 @@ class TextToSpeechManager(context: Context) {
             return
         }
 
-        forceMaxVolume()
-
-        val params = Bundle().apply {
-            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+        // A one-shot reply replaces whatever was queued or streaming.
+        synchronized(inFlight) {
+            inFlight.clear()
+            streamOpen = false
+            buffer = ""
         }
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "mark_reply")
+        enqueue(text, TextToSpeech.QUEUE_FLUSH)
     }
 
     /**
@@ -147,45 +220,102 @@ class TextToSpeechManager(context: Context) {
      * Used for streaming LLM responses.
      */
     fun speakStream(chunk: String) {
-        if (!ready) return
+        if (initFailed) return
+        if (!ready) {
+            // Held until the engine is ready (see init). It used to be dropped,
+            // which lost the first reply after a cold start and left voice mode
+            // stuck on "Thinking".
+            buffer += chunk
+            streamOpen = true
+            _isSpeaking.value = true
+            return
+        }
+        if (!streamOpen) {
+            streamOpen = true
+            spokeThisStream = false
+            _isSpeaking.value = true
+        }
         buffer += chunk
 
-        // Look for sentence boundaries: . ! ?
-        val lastPunch = buffer.lastIndexOfAny(listOf(".", "!", "?", "\n"))
-        if (lastPunch != -1 && lastPunch >= MIN_SENTENCE_LENGTH) {
-            val toSpeak = buffer.substring(0, lastPunch + 1).trim()
+        // The first sentence goes out as soon as it is complete, so the reply
+        // starts quickly; later ones are batched for smoother prosody.
+        val minLength = if (spokeThisStream) BATCH_SENTENCE_LENGTH else FIRST_SENTENCE_LENGTH
+        val cut = SpeechChunker.cutPoint(buffer, minLength)
+        if (cut > 0) {
+            val toSpeak = buffer.substring(0, cut).trim()
+            buffer = buffer.substring(cut)
             if (toSpeak.isNotBlank()) {
-                forceMaxVolume()
-                val params = Bundle().apply {
-                    putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-                }
-                tts?.speak(toSpeak, TextToSpeech.QUEUE_ADD, params, "mark_tts_${System.currentTimeMillis()}")
-                buffer = buffer.substring(lastPunch + 1)
+                spokeThisStream = true
+                enqueue(toSpeak, TextToSpeech.QUEUE_ADD)
             }
         }
     }
 
     /**
-     * Flush any remaining text in the stream buffer.
+     * Flush any remaining text in the stream buffer and close the stream.
      */
     fun finalizeStream() {
-        if (buffer.isNotBlank()) {
-            forceMaxVolume()
-            val params = Bundle().apply {
-                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-            }
-            tts?.speak(buffer.trim(), TextToSpeech.QUEUE_ADD, params, "mark_tts_final")
-            buffer = ""
+        streamOpen = false
+        if (!ready) {
+            if (initFailed) { buffer = ""; settle() }
+            return // otherwise init speaks the held buffer once ready
         }
+        val rest = buffer.trim()
+        buffer = ""
+        if (rest.isNotBlank()) enqueue(rest, TextToSpeech.QUEUE_ADD)
+        settle()
     }
 
     /**
      * Stops any current speech.
      */
     fun stop() {
-        buffer = ""
+        synchronized(inFlight) {
+            inFlight.clear()
+            streamOpen = false
+            buffer = ""
+        }
         tts?.stop()
         _isSpeaking.value = false
+        releaseFocus()
+    }
+
+    private fun enqueue(text: String, mode: Int) {
+        ensureAudible()
+        ensureUsableVoice()
+        if (!holdingFocus) {
+            holdingFocus = true
+            audioManager?.requestAudioFocus(focusRequest)
+        }
+        val params = Bundle().apply {
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+        }
+        val id = "mark_tts_${utteranceCounter++}"
+        synchronized(inFlight) { inFlight.add(id) }
+        _isSpeaking.value = true
+        val result = tts?.speak(text, mode, params, id)
+        if (result != TextToSpeech.SUCCESS) finished(id)
+    }
+
+    private fun finished(utteranceId: String?) {
+        synchronized(inFlight) { utteranceId?.let { inFlight.remove(it) } }
+        settle()
+    }
+
+    /** Speaking ends only when nothing is queued and no more text is coming. */
+    private fun settle() {
+        val idle = synchronized(inFlight) { inFlight.isEmpty() && !streamOpen }
+        if (idle) {
+            _isSpeaking.value = false
+            releaseFocus()
+        }
+    }
+
+    private fun releaseFocus() {
+        if (holdingFocus) {
+            holdingFocus = false
+            audioManager?.abandonAudioFocusRequest(focusRequest)
+        }
     }
 
     /**
@@ -199,15 +329,17 @@ class TextToSpeechManager(context: Context) {
         _isSpeaking.value = false
     }
 
-    private fun forceMaxVolume() {
-        val am = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        am?.let {
-            val max = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            it.setStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                (max * 0.8f).toInt(),
-                0
-            )
+    /**
+     * Mark used to force media volume to 80% before every sentence — blasting
+     * at night and leaving the user's music louder afterwards. Now the volume
+     * is only raised when it is too low to hear at all.
+     */
+    private fun ensureAudible() {
+        val am = audioManager ?: return
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val floor = (max + 3) / 4
+        if (am.getStreamVolume(AudioManager.STREAM_MUSIC) < floor) {
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, floor, 0)
         }
     }
 }
