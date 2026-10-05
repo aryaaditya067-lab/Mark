@@ -27,6 +27,13 @@ class SettingsViewModel(
     private val laptop: LaptopTool? = null
 ) : ViewModel() {
 
+    // ---- Messages ----
+
+    val announceMessages: StateFlow<Boolean> = repository.announceMessages
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setAnnounceMessages(enabled: Boolean) = viewModelScope.launch { repository.setAnnounceMessages(enabled) }
+
     // ---- Morning brief ----
 
     val briefEnabled: StateFlow<Boolean> = repository.briefEnabled

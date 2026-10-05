@@ -38,6 +38,7 @@ fun SettingsScreen(
     val savedPlaces by settingsViewModel.savedPlaces.collectAsState()
     val userName by settingsViewModel.userName.collectAsState()
     val facts by settingsViewModel.facts.collectAsState()
+    val announceMessages by settingsViewModel.announceMessages.collectAsState()
     val briefEnabled by settingsViewModel.briefEnabled.collectAsState()
     val briefTime by settingsViewModel.briefTime.collectAsState()
     val laptopConfig by settingsViewModel.laptopConfig.collectAsState()
@@ -226,6 +227,16 @@ fun SettingsScreen(
                             Icon(Icons.Default.Done, contentDescription = "Save")
                         }
                     }
+                }
+            )
+
+            ListItem(
+                headlineContent = { Text("Read new messages aloud") },
+                supportingContent = {
+                    Text("WhatsApp, Messages, Telegram. Only into headphones, never 10 pm to 7 am or in Do Not Disturb. Needs notification access.")
+                },
+                trailingContent = {
+                    Switch(checked = announceMessages, onCheckedChange = { settingsViewModel.setAnnounceMessages(it) })
                 }
             )
 

@@ -21,10 +21,10 @@ class PhoneToolSchemasTest {
     }
 
     @Test
-    fun onlyDialAndSendNeedASpokenYes() {
+    fun onlyDialSendAndReplyNeedASpokenYes() {
         val gated = PhoneToolSchemas.remoteTools(emptySet())
             .filter { it.needsConfirmation(ToolRequest.of()) }.map { it.name }.toSet()
-        assertEquals(setOf("call_execute", "sms_execute"), gated)
+        assertEquals(setOf("call_execute", "sms_execute", "reply_to_message"), gated)
     }
 
     @Test

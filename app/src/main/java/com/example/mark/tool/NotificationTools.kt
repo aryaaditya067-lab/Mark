@@ -95,3 +95,40 @@ class UnreadCountTool(context: Context) : BaseNotificationTool(context) {
         return ToolResult.Success("You have $count unread notifications.")
     }
 }
+
+class ReadConversationTool(context: Context) : BaseNotificationTool(context) {
+    override val name = "read_conversation"
+    override val intent = IntentType.READ_CONVERSATION
+    override val definition = PhoneToolSchemas.READ_CONVERSATION
+
+    override suspend fun execute(request: ToolRequest): ToolResult {
+        checkEnabled()?.let { return it }
+        val contact = request.string("contact") ?: return ToolResult.Failure("Whose messages, sir?", reason = "missing_arg")
+        val chat = com.example.mark.utils.Conversations.find(MarkNotificationService.getConversations(), contact, request.string("app"))
+            ?: return ToolResult.Failure("No unread chat from $contact right now.", reason = "not_found")
+        return ToolResult.Success(com.example.mark.utils.Conversations.describe(chat), mapOf("contact" to chat.title, "app" to chat.app))
+    }
+}
+
+/** Reply inside WhatsApp/Telegram/Messages via the notification's reply action, after a spoken yes. */
+class ReplyMessageTool(context: Context) : BaseNotificationTool(context) {
+    override val name = "reply_to_message"
+    override val intent = IntentType.REPLY_MESSAGE
+    override val definition = PhoneToolSchemas.REPLY_MESSAGE
+
+    override fun needsConfirmation(request: ToolRequest) = true
+
+    override suspend fun execute(request: ToolRequest): ToolResult {
+        checkEnabled()?.let { return it }
+        val contact = request.string("contact") ?: return ToolResult.Failure("Reply to whom, sir?", reason = "missing_arg")
+        val text = request.string("text") ?: return ToolResult.Failure("What should I reply?", reason = "missing_arg")
+        val chat = com.example.mark.utils.Conversations.find(MarkNotificationService.getConversations(), contact, request.string("app"))
+            ?: return ToolResult.Failure("I can only reply while $contact's message notification is showing.", reason = "not_found")
+        if (!chat.canReply) return ToolResult.Failure("${chat.app} doesn't allow replies from its notification for this chat.", reason = "no_reply_action")
+        return if (MarkNotificationService.reply(context, chat.key, text)) {
+            ToolResult.Success("Replied to ${chat.title} on ${chat.app}.")
+        } else {
+            ToolResult.Failure("The reply didn't go through; the notification may have been dismissed.", reason = "send_failed")
+        }
+    }
+}

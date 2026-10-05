@@ -56,6 +56,8 @@ class MarkApplication : Application() {
                 SleepTool(healthProvider),
                 HomeTool(this),
                 ReadNotificationsTool(this),
+                ReadConversationTool(this),
+                ReplyMessageTool(this),
                 ReadLastMessageTool(this),
                 CheckNewMessagesTool(this),
                 UnreadCountTool(this),

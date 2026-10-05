@@ -23,6 +23,7 @@ class SettingsRepository(private val context: Context) {
         val USER_NAME = stringPreferencesKey("user_name")
         val BRIEF_ENABLED = booleanPreferencesKey("brief_enabled")
         val BRIEF_TIME = stringPreferencesKey("brief_time")
+        val ANNOUNCE_MESSAGES = booleanPreferencesKey("announce_messages")
     }
 
     private val gson = com.google.gson.Gson()
@@ -70,6 +71,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setUserName(name: String) {
         context.dataStore.edit { it[Keys.USER_NAME] = name.trim() }
+    }
+
+    /** Speak new chat messages into headphones; off unless the user turns it on. */
+    val announceMessages: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.ANNOUNCE_MESSAGES] ?: false }
+
+    suspend fun setAnnounceMessages(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.ANNOUNCE_MESSAGES] = enabled }
     }
 
     /** Daily brief notification; off until the user turns it on. */

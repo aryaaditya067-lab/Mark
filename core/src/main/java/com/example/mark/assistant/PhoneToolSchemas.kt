@@ -85,6 +85,19 @@ object PhoneToolSchemas {
         )
     )
 
+    val READ_CONVERSATION = def(
+        "read_conversation",
+        "Read the latest messages of one chat (WhatsApp, Telegram, Messages...) from its notification.",
+        "contact" to "Contact or group name", "app" to "Optional app name, e.g. WhatsApp", required = listOf("contact")
+    )
+    val REPLY_MESSAGE = def(
+        "reply_to_message",
+        "Reply inside a chat app through its notification's reply action. Needs the user's spoken " +
+            "confirmation; only works while that chat's notification is still showing.",
+        "contact" to "Contact or group name", "text" to "The reply text", "app" to "Optional app name",
+        required = listOf("contact", "text")
+    )
+
     /** Schema, offline intent, and whether a spoken yes is required. */
     data class Entry(val definition: FunctionDef, val intent: IntentType, val needsConfirmation: Boolean = false)
 
@@ -105,6 +118,8 @@ object PhoneToolSchemas {
         Entry(SET_REMINDER, IntentType.SET_REMINDER),
         Entry(LIST_REMINDERS, IntentType.LIST_REMINDERS),
         Entry(CANCEL_REMINDER, IntentType.CANCEL_REMINDER),
+        Entry(READ_CONVERSATION, IntentType.READ_CONVERSATION),
+        Entry(REPLY_MESSAGE, IntentType.REPLY_MESSAGE, needsConfirmation = true),
     )
 
     /** Watch side: proxies for every phone tool not already registered locally. */
