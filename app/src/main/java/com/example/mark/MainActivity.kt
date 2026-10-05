@@ -48,12 +48,16 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val EXTRA_VOICE = "com.example.mark.extra.VOICE"
 
-        private const val EXTRA_SPEAK = "com.example.mark.extra.SPEAK"
+        private const val EXTRA_READ_BRIEF = "com.example.mark.extra.READ_BRIEF"
 
-        /** Opens Mark and reads [text] aloud (the brief's Listen action). */
-        fun speakIntent(context: android.content.Context, text: String): android.content.Intent =
+        /**
+         * Opens Mark and reads the latest brief aloud (its Listen action). The
+         * text is not carried in the intent: this activity is exported, and any
+         * app could otherwise make Mark say anything.
+         */
+        fun readBriefIntent(context: android.content.Context): android.content.Intent =
             android.content.Intent(context, MainActivity::class.java)
-                .putExtra(EXTRA_SPEAK, text)
+                .putExtra(EXTRA_READ_BRIEF, true)
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
         /** Opens Mark straight into voice mode. */
@@ -65,7 +69,9 @@ class MainActivity : ComponentActivity() {
 
     private fun handleVoiceRequest(intent: android.content.Intent?) {
         if (intent == null) return
-        intent.getStringExtra(EXTRA_SPEAK)?.let { (application as MarkApplication).ttsManager.speak(it) }
+        if (intent.getBooleanExtra(EXTRA_READ_BRIEF, false)) {
+            com.example.mark.brief.MorningBrief.lastBrief(this)?.let { (application as MarkApplication).ttsManager.speak(it) }
+        }
         if (intent.getBooleanExtra(EXTRA_VOICE, false) ||
             intent.action == android.content.Intent.ACTION_ASSIST ||
             intent.action == android.content.Intent.ACTION_VOICE_COMMAND

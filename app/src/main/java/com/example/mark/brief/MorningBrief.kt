@@ -45,6 +45,12 @@ import java.util.Locale
 object MorningBrief {
 
     const val CHANNEL_ID = "mark_brief"
+    private const val PREFS = "mark_brief"
+    private const val KEY_LAST = "last"
+
+    /** The text of the most recent brief, for its Listen action. */
+    fun lastBrief(context: Context): String? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LAST, null)
     private const val REQUEST_CODE = 7301
     private const val HEADS_UP_MINUTES = 10L
 
@@ -168,8 +174,9 @@ object MorningBrief {
                 NotificationChannel(CHANNEL_ID, "Morning brief", NotificationManager.IMPORTANCE_DEFAULT)
             )
         }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LAST, text).apply()
         val listen = PendingIntent.getActivity(
-            context, REQUEST_CODE, MainActivity.speakIntent(context, text),
+            context, REQUEST_CODE, MainActivity.readBriefIntent(context),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val notification = android.app.Notification.Builder(context, CHANNEL_ID)
