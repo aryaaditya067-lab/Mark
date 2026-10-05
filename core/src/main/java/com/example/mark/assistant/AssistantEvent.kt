@@ -12,6 +12,12 @@ sealed interface AssistantEvent {
         val mode: ReplyMode = ReplyMode.SPEAK
     ) : AssistantEvent
     
+    /**
+     * The user ended the conversation ("bas", "bye"). Emitted before [Done];
+     * voice surfaces let the goodbye finish speaking, then stop listening.
+     */
+    data object EndSession : AssistantEvent
+
     /** The turn has finished. */
     data object Done : AssistantEvent
     

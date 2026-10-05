@@ -240,6 +240,19 @@ class AssistantControllerLlmTest {
     }
 
     @Test
+    fun goodbyeEndsTheSession() {
+        val events = controller(FakeLlm()).ask("bye mark")
+        assertTrue(events.texts().single().isNotBlank())
+        assertEquals(listOf(AssistantEvent.EndSession, AssistantEvent.Done), events.takeLast(2))
+    }
+
+    @Test
+    fun ordinaryTurnDoesNotEndTheSession() {
+        val events = controller(FakeLlm(text("Hi."))).ask(question)
+        assertTrue(AssistantEvent.EndSession !in events)
+    }
+
+    @Test
     fun emptyReplyFallsBackToNotUnderstood() {
         val api = FakeLlm(emptyList())
         val events = controller(api).ask(question)

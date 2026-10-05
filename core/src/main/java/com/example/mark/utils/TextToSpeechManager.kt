@@ -1,6 +1,8 @@
 package com.example.mark.utils
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -63,12 +65,32 @@ class TextToSpeechManager(context: Context) {
         )
     }
 
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    /** Spoken replies are assistant speech: music ducks under them instead of fighting them. */
+    private val speechAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+
+    private val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        .setAudioAttributes(speechAttributes)
+        .build()
+
+    @Volatile private var holdingFocus = false
+
     init {
         tts = TextToSpeech(context.applicationContext) { status ->
             ready = status == TextToSpeech.SUCCESS
+            if (!ready) {
+                // Nothing will ever be spoken; never leave callers waiting on it.
+                synchronized(inFlight) { inFlight.clear(); streamOpen = false; buffer = "" }
+                _isSpeaking.value = false
+            }
             if (ready) {
                 tts?.setSpeechRate(0.90f)
                 tts?.setPitch(0.85f)
+                tts?.setAudioAttributes(speechAttributes)
 
                 val allVoices = tts?.voices
                 allVoices?.forEach {
@@ -114,6 +136,11 @@ class TextToSpeechManager(context: Context) {
 
                 pending?.let { speak(it) }
                 pending = null
+                // Streamed text that arrived before the engine was ready.
+                val early = buffer.trim()
+                buffer = ""
+                if (early.isNotBlank()) enqueue(early, TextToSpeech.QUEUE_ADD)
+                settle()
             }
         }
     }
@@ -159,7 +186,15 @@ class TextToSpeechManager(context: Context) {
      * Used for streaming LLM responses.
      */
     fun speakStream(chunk: String) {
-        if (!ready) return
+        if (!ready) {
+            // Held until the engine is ready (see init). It used to be dropped,
+            // which lost the first reply after a cold start and left voice mode
+            // stuck on "Thinking".
+            buffer += chunk
+            streamOpen = true
+            _isSpeaking.value = true
+            return
+        }
         if (!streamOpen) {
             streamOpen = true
             spokeThisStream = false
@@ -185,10 +220,11 @@ class TextToSpeechManager(context: Context) {
      * Flush any remaining text in the stream buffer and close the stream.
      */
     fun finalizeStream() {
+        streamOpen = false
+        if (!ready) return // init speaks the held buffer once ready
         val rest = buffer.trim()
         buffer = ""
         if (rest.isNotBlank()) enqueue(rest, TextToSpeech.QUEUE_ADD)
-        streamOpen = false
         settle()
     }
 
@@ -203,10 +239,15 @@ class TextToSpeechManager(context: Context) {
         }
         tts?.stop()
         _isSpeaking.value = false
+        releaseFocus()
     }
 
     private fun enqueue(text: String, mode: Int) {
-        forceMaxVolume()
+        ensureAudible()
+        if (!holdingFocus) {
+            holdingFocus = true
+            audioManager?.requestAudioFocus(focusRequest)
+        }
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
         }
@@ -225,7 +266,17 @@ class TextToSpeechManager(context: Context) {
     /** Speaking ends only when nothing is queued and no more text is coming. */
     private fun settle() {
         val idle = synchronized(inFlight) { inFlight.isEmpty() && !streamOpen }
-        if (idle) _isSpeaking.value = false
+        if (idle) {
+            _isSpeaking.value = false
+            releaseFocus()
+        }
+    }
+
+    private fun releaseFocus() {
+        if (holdingFocus) {
+            holdingFocus = false
+            audioManager?.abandonAudioFocusRequest(focusRequest)
+        }
     }
 
     /**
@@ -239,15 +290,17 @@ class TextToSpeechManager(context: Context) {
         _isSpeaking.value = false
     }
 
-    private fun forceMaxVolume() {
-        val am = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        am?.let {
-            val max = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            it.setStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                (max * 0.8f).toInt(),
-                0
-            )
+    /**
+     * Mark used to force media volume to 80% before every sentence — blasting
+     * at night and leaving the user's music louder afterwards. Now the volume
+     * is only raised when it is too low to hear at all.
+     */
+    private fun ensureAudible() {
+        val am = audioManager ?: return
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val floor = (max + 3) / 4
+        if (am.getStreamVolume(AudioManager.STREAM_MUSIC) < floor) {
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, floor, 0)
         }
     }
 }

@@ -32,6 +32,9 @@ class SpeechRecognizerHelper(private val context: Context) {
     val partialResults: StateFlow<String> = _partialResults.asStateFlow()
 
     private var lastVoiceTime = 0L
+
+    /** When we last cancelled the recognizer ourselves; its ERROR_CLIENT echo is ignored. */
+    private var ownCancelAt = 0L
     private val SILENCE_THRESHOLD_MS = 2000L
     private val AMPLITUDE_THRESHOLD = 0.2f
 
@@ -63,7 +66,8 @@ class SpeechRecognizerHelper(private val context: Context) {
             return
         }
 
-        // Reset state
+        // Reset state. cancel() echoes back as ERROR_CLIENT, which is ignored below.
+        ownCancelAt = System.currentTimeMillis()
         rec.cancel()
 
         rec.setRecognitionListener(object : RecognitionListener {
@@ -74,7 +78,9 @@ class SpeechRecognizerHelper(private val context: Context) {
                     .orEmpty()
                 android.util.Log.d("MarkSpeech", "onResults: $text")
                 _partialResults.value = ""
-                if (text.isNotBlank()) onResult(text)
+                // An empty result used to end listening with no result and no error,
+                // which left phone voice mode stuck on "Listening" for good.
+                if (text.isNotBlank()) onResult(text) else onError(errorText(SpeechRecognizer.ERROR_NO_MATCH))
                 onDone()
             }
 
@@ -91,12 +97,16 @@ class SpeechRecognizerHelper(private val context: Context) {
 
             override fun onError(error: Int) {
                 _partialResults.value = ""
-                if (error == SpeechRecognizer.ERROR_CLIENT) {
-                    android.util.Log.d("MarkSpeech", "Ignoring Client Error (likely from cancel())")
-                    return 
+                if (error == SpeechRecognizer.ERROR_CLIENT &&
+                    System.currentTimeMillis() - ownCancelAt < OWN_CANCEL_WINDOW_MS
+                ) {
+                    android.util.Log.d("MarkSpeech", "Ignoring Client Error from our own cancel()")
+                    return
                 }
-                
-                val msg = errorText(error)
+
+                // Any other ERROR_CLIENT used to be swallowed too, without onDone,
+                // so the caller waited forever. It is reported as a silence.
+                val msg = errorText(if (error == SpeechRecognizer.ERROR_CLIENT) SpeechRecognizer.ERROR_NO_MATCH else error)
                 android.util.Log.e("MarkSpeech", "onError: $error ($msg)")
                 onError(msg)
                 onDone()
@@ -150,6 +160,10 @@ class SpeechRecognizerHelper(private val context: Context) {
 
     fun shutdown() {
         recognizer?.destroy()
+    }
+
+    private companion object {
+        const val OWN_CANCEL_WINDOW_MS = 1500L
     }
 
     private fun errorText(code: Int): String = when (code) {

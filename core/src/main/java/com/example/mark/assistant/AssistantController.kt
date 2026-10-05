@@ -40,6 +40,7 @@ class AssistantController(
     private val watchSessionHistory = mutableListOf<Message>()
     private var currentTurn: Job? = null
     private var lastSpokenReply: String? = null
+    private var endSessionRequested = false
 
     private data class AwaitingConfirmation(
         val intent: com.example.mark.router.Intent,
@@ -139,6 +140,7 @@ class AssistantController(
     suspend fun send(userText: String): Flow<AssistantEvent> = flow {
         stop()
         currentTurn = currentCoroutineContext()[Job]
+        endSessionRequested = false
 
         try {
             val initialDecision = route(userText)
@@ -194,6 +196,7 @@ class AssistantController(
                     emit(AssistantEvent.Text(combinedText.trim(), ReplyMode.SPEAK))
                 }
             }
+            if (endSessionRequested) emit(AssistantEvent.EndSession)
 
         } catch (e: CancellationException) {
             throw e
@@ -376,6 +379,8 @@ class AssistantController(
                 return "Alright, sir." to ReplyMode.SPEAK
             }
         }
+
+        if (intent.type == IntentType.END_SESSION) endSessionRequested = true
 
         val result = when (intent.type) {
             IntentType.GREETING, IntentType.END_SESSION, IntentType.EASTER_EGG, IntentType.REPEAT, IntentType.HELP -> ToolResult.Success(intent.type.name, intent.params)

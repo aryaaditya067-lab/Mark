@@ -55,6 +55,10 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     private var sendJob: Job? = null
     private var streamJob: Job? = null
     private var consecutiveSilences = 0
+    /** Non-silence recognizer errors in a row ("Network error."), so they cannot loop forever. */
+    private var consecutiveErrors = 0
+    /** Set when the user said goodbye: end once the goodbye has been spoken. */
+    private var endAfterSpeaking = false
     private val restartTimes = mutableListOf<Long>()
     private var proactiveSpokenThisSession = false
     private var lastBatteryLevel = -1
@@ -81,8 +85,13 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
 
                 // Automate flow: restart listening after speaking finishes
                 if (wasSpeaking && !speaking && !starting) {
-                    android.util.Log.d("MarkSession", "auto-restart (after speaking)")
-                    startListening()
+                    if (endAfterSpeaking) {
+                        endAfterSpeaking = false
+                        endSession("END_SESSION")
+                    } else {
+                        android.util.Log.d("MarkSession", "auto-restart (after speaking)")
+                        startListening()
+                    }
                 }
             }
         }
@@ -330,16 +339,19 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                     android.util.Log.d("MarkGreet", "mic-ready in ${System.currentTimeMillis() - tStart}ms")
                 },
                 onPartial = { },
-                onResult = { finalText -> consecutiveSilences = 0; send(finalText) },
+                onResult = { finalText -> consecutiveSilences = 0; consecutiveErrors = 0; send(finalText) },
                 onError = { message ->
                     if (message.contains("Didn't catch that") || message.contains("No speech detected")) {
                         consecutiveSilences++
                         if (consecutiveSilences >= 2) endSession("silence")
                         else { starting = false; startListening() }
                     } else {
+                        // Spoken, then the mic reopens when speech ends; a persistent
+                        // error ("Network error.") used to repeat until tapped.
+                        consecutiveErrors++
                         _uiState.update { it.copy(errorMessage = null) }
-                        tts.speak(message)
                         starting = false
+                        if (consecutiveErrors >= 2) endSession("errors") else tts.speak(message)
                     }
                 },
                 onDone = { _uiState.update { it.copy(isListening = false) }; _amplitude.value = 0f; starting = false },
@@ -356,6 +368,8 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
         speech.stopListening()
         _uiState.update { it.copy(isListening = false, isPreparing = false, isLoading = false, isSpeaking = false) }
         consecutiveSilences = 0
+        consecutiveErrors = 0
+        endAfterSpeaking = false
         starting = false
         proactiveSpokenThisSession = false
         viewModelScope.launch { assistant.clearConversation() }
@@ -379,6 +393,7 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                         _uiState.update { it.copy(isLoading = false, streamingReply = fullReply) }
                         if (currentMode == ReplyMode.SPEAK) { tts.speakStream(event.content); startReplyStreaming(fullReply) }
                     }
+                    is com.example.mark.assistant.AssistantEvent.EndSession -> endAfterSpeaking = true
                     is com.example.mark.assistant.AssistantEvent.Error -> {
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
                         // Never read raw exception text aloud.
@@ -396,13 +411,14 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                         if (fullReply.isNotBlank()) {
                             _messages.update { it + Message(role = "assistant", content = fullReply) }
                             if (currentMode == ReplyMode.SPEAK) tts.finalizeStream()
+                            else if (endAfterSpeaking) { fireDoubleHaptic(); endSession("END_SESSION") }
                             else { fireDoubleHaptic(); android.util.Log.d("MarkSession", "auto-restart (after silent confirm)"); startListening() }
-
-                            if (fullReply.contains("Theek hai sir", ignoreCase = true) ||
-                                fullReply.contains("Good night sir", ignoreCase = true) ||
-                                fullReply.contains("As you wish", ignoreCase = true)) {
-                                viewModelScope.launch { delay(1500); endSession("END_SESSION") }
-                            }
+                            // A spoken goodbye ends the session when speech finishes (see the
+                            // isSpeaking collector). This used to match reply text against
+                            // three phrases, which missed most goodbyes and fired on any LLM
+                            // reply that happened to contain "As you wish".
+                        } else if (endAfterSpeaking) {
+                            endSession("END_SESSION")
                         }
                     }
                 }

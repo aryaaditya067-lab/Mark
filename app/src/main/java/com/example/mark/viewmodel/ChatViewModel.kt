@@ -149,6 +149,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             tts.speakStream(event.content)
                         }
                     }
+                    is AssistantEvent.EndSession -> { /* typed chat has no session to end */ }
                     is AssistantEvent.Error -> {
                         val msg = event.throwable.message ?: "Something went wrong."
                         _uiState.update { it.copy(isLoading = false, errorMessage = msg) }
