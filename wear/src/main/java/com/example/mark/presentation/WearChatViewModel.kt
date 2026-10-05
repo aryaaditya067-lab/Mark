@@ -141,12 +141,13 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
 
         // Say "no events" only when the calendar could actually be read;
         // without permission it used to claim an empty day every morning.
-        if (canReadCalendar()) {
-            val nextEvent = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val calendarReadable = canReadCalendar()
+        val nextEvent = if (calendarReadable) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching { fetchNextCalendarEvent() }.getOrNull()
             }
-            briefParts.add(nextEvent ?: "Aaj koi event nahi hai")
-        }
+        } else null
+        if (calendarReadable) briefParts.add(nextEvent ?: "Aaj koi event nahi hai")
 
         val battery = getBatteryLevel()
         if (battery < 40) briefParts.add("Battery $battery percent")

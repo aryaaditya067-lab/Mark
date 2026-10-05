@@ -96,16 +96,19 @@ class ChatHistoryRepository(
         }
     }
 
-    private fun DocumentSnapshot.toMessage(): Message? = Message(
-        id = id,
-        role = getString("role") ?: return null,
-        content = getString("content"),
-        toolCallsJson = getString("toolCalls"),
-        toolCallId = getString("toolCallId"),
-        name = getString("name"),
-        isToolReply = getBoolean("isToolReply") ?: false,
-        createdAt = getLong("createdAt") ?: 0L
-    )
+    private fun DocumentSnapshot.toMessage(): Message? {
+        val role = getString("role") ?: return null
+        return Message(
+            id = id,
+            role = role,
+            content = getString("content"),
+            toolCallsJson = getString("toolCalls"),
+            toolCallId = getString("toolCallId"),
+            name = getString("name"),
+            isToolReply = getBoolean("isToolReply") ?: false,
+            createdAt = getLong("createdAt") ?: 0L
+        )
+    }
 
     private fun Message.toFirestore(): Map<String, Any?> = hashMapOf(
         "role" to role,

@@ -85,14 +85,17 @@ class TaskRepository(
         collection().document(id).delete().await()
     }
 
-    private fun DocumentSnapshot.toTask(): Task? = Task(
-        id = id,
-        title = getString("title") ?: return null,
-        description = getString("description") ?: "",
-        dueDate = getString("dueDate") ?: "",
-        isCompleted = getBoolean("isCompleted") ?: false,
-        createdAt = getLong("createdAt") ?: 0L
-    )
+    private fun DocumentSnapshot.toTask(): Task? {
+        val title = getString("title") ?: return null
+        return Task(
+            id = id,
+            title = title,
+            description = getString("description") ?: "",
+            dueDate = getString("dueDate") ?: "",
+            isCompleted = getBoolean("isCompleted") ?: false,
+            createdAt = getLong("createdAt") ?: 0L
+        )
+    }
 
     companion object {
         val instance: TaskRepository by lazy { TaskRepository() }
