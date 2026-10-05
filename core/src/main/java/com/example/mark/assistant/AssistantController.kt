@@ -70,6 +70,8 @@ class AssistantController(
             IntentType.CONTEXT_FOLLOW_UP
         )
 
+        private const val WATCH_HISTORY_CAP = 4 * Constants.MAX_HISTORY_MESSAGES
+
         // Intents that ALWAYS run on the phone when spoken from the watch.
         private val ALWAYS_REMOTE = setOf(
             IntentType.TOGGLE_FLASHLIGHT, IntentType.SET_DND, IntentType.GET_CALENDAR, IntentType.RING_PHONE,
@@ -336,9 +338,12 @@ class AssistantController(
     }
 
     private suspend fun handleOnlineStream(userText: String): Flow<AssistantEvent> = flow {
-        val userMsg = Message(role = "user", content = userText)
-        persist(userMsg)
-        val stored = if (isWatch) watchSessionHistory.takeLast(Constants.MAX_HISTORY_MESSAGES) else historyProvider()?.recent(Constants.MAX_HISTORY_MESSAGES) ?: emptyList()
+        // Read context BEFORE storing this turn's user message — otherwise the
+        // window already contains it and Groq sees the question twice.
+        val past = if (isWatch) watchSessionHistory.toList()
+        else runCatching { historyProvider()?.recent(Constants.MAX_HISTORY_MESSAGES) }.getOrNull() ?: emptyList()
+        val stored = HistoryWindow.select(past, Constants.MAX_HISTORY_MESSAGES)
+        persist(Message(role = "user", content = userText))
         val messages = buildList {
             add(GroqMessage(role = "system", content = PromptBuilder.systemPrompt()))
             addAll(stored.map { it.toGroqMessage() })
@@ -384,28 +389,42 @@ class AssistantController(
     }
 
     private suspend fun askStream(messages: List<GroqMessage>): Flow<GroqStreamResponse> = flow {
-        val responseBody = api.chatCompletionStream(authHeader = "Bearer ${Constants.GROQ_API_KEY}", request = GroqRequest(model = Constants.GROQ_MODEL, messages = messages, tools = toolManager.definitions, stream = true))
+        val responseBody = api.chatCompletionStream(authHeader = groqAuthHeader(), request = GroqRequest(model = Constants.GROQ_MODEL, messages = messages, tools = toolManager.definitions, stream = true))
         responseBody.byteStream().bufferedReader().use { reader ->
             while (true) {
                 val line = reader.readLine() ?: break
                 if (line.startsWith("data: ")) {
                     val data = line.substring(6).trim()
                     if (data == "[DONE]") break
-                    try { emit(gson.fromJson(data, GroqStreamResponse::class.java)) } catch (e: Exception) { }
+                    // Parse inside the try, emit outside it: emit() rethrows downstream
+                    // failures and cancellation, which must not be swallowed here.
+                    val chunk = try { gson.fromJson(data, GroqStreamResponse::class.java) } catch (e: Exception) { null }
+                    if (chunk != null) emit(chunk)
                 }
             }
         }
     }
 
+    private fun groqAuthHeader(): String {
+        check(Constants.GROQ_API_KEY.isNotBlank()) {
+            "Groq API key is not set. Add GROQ_API_KEY to local.properties and rebuild."
+        }
+        return "Bearer ${Constants.GROQ_API_KEY}"
+    }
+
     private suspend fun ask(messages: List<GroqMessage>): GroqMessage {
-        val response = api.chatCompletion(authHeader = "Bearer ${Constants.GROQ_API_KEY}", request = GroqRequest(model = Constants.GROQ_MODEL, messages = messages, tools = toolManager.definitions))
+        val response = api.chatCompletion(authHeader = groqAuthHeader(), request = GroqRequest(model = Constants.GROQ_MODEL, messages = messages, tools = toolManager.definitions))
         return response.choices?.firstOrNull()?.message ?: error("Empty response")
     }
 
     private suspend fun persist(vararg messages: Message) = persist(messages.toList())
     private suspend fun persist(messages: List<Message>) {
-        if (isWatch) watchSessionHistory.addAll(messages)
-        else runCatching { historyProvider()?.appendAll(messages) }
+        if (isWatch) {
+            watchSessionHistory.addAll(messages)
+            // Only the tail is ever sent to Groq; a long session must not grow forever.
+            val overflow = watchSessionHistory.size - WATCH_HISTORY_CAP
+            if (overflow > 0) watchSessionHistory.subList(0, overflow).clear()
+        } else runCatching { historyProvider()?.appendAll(messages) }
     }
     private fun Message.toGroqMessage() = GroqMessage(role = role, content = content, toolCalls = toolCallsJson?.let { gson.fromJson(it, toolCallListType) }, toolCallId = toolCallId, name = name)
 
@@ -426,11 +445,11 @@ class AssistantController(
             awaitingConfirmation = null
             if (decision == "yes") {
                 val result = toolManager.execute(targetIntent.type, targetIntent.params, command.params["raw_input"])
-                return CommandResult(commandId = command.id, text = result.text, success = true, data = result.data)
+                return CommandResult(commandId = command.id, text = result.text, success = result !is ToolResult.Failure, data = result.data)
             } else return CommandResult(command.id, "Okay, cancelled.", true)
         }
         val result = toolManager.execute(command.type, command.params, command.params["raw_input"])
-        return CommandResult(commandId = command.id, text = result.text, success = result is ToolResult.Success || result is ToolResult.Partial, data = result.data)
+        return CommandResult(commandId = command.id, text = result.text, success = result !is ToolResult.Failure, data = result.data)
     }
 
     private suspend fun FlowCollector<AssistantEvent>.handleCallResolution(data: Map<String, String>, rawText: String) {

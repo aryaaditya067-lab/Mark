@@ -1,11 +1,15 @@
 package com.example.mark.utils
 
+import com.example.mark.core.BuildConfig
+
 object Constants {
-    const val GROQ_API_KEY = "YOUR_GROQ_API_KEY"
+    /** Set GROQ_API_KEY in local.properties; see README. */
+    val GROQ_API_KEY: String = BuildConfig.GROQ_API_KEY
 
     const val GROQ_BASE_URL = "https://api.groq.com/"
 
-    const val WEATHER_API_KEY = "YOUR_WEATHER_API_KEY"
+    /** Set WEATHER_API_KEY in local.properties; see README. */
+    val WEATHER_API_KEY: String = BuildConfig.WEATHER_API_KEY
     const val WEATHER_BASE_URL = "https://api.openweathermap.org/"
 
     const val SYSTEM_PROMPT = "You are Mark, a personal AI assistant. " +

@@ -3,6 +3,9 @@ package com.example.mark.assistant
 import com.example.mark.router.IntentType
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import com.example.mark.network.Tool as GroqToolSchema
 
 /**
@@ -44,13 +47,19 @@ class ToolManager(private val registry: ToolRegistry) {
     /**
      * Tools are contracted not to throw, but a bug in one must not kill the
      * whole turn — Groq can work with "this failed", not with a crash.
+     * Cancellation is the exception: it is how stop() and barge-in end a turn,
+     * so it must propagate rather than become a "failed" reply.
      */
     private suspend fun run(tool: Tool, request: ToolRequest): ToolResult =
-        runCatching { tool.execute(request) }
-            .getOrElse { e ->
-                ToolResult.Failure(
-                    text = "Failed: ${e.message ?: "tool error"}",
-                    reason = "exception"
-                )
-            }
+        try {
+            tool.execute(request)
+        } catch (e: Exception) {
+            // Rethrows only if this turn was cancelled; a tool's own internal
+            // timeout is still just a failed tool.
+            if (e is CancellationException) currentCoroutineContext().ensureActive()
+            ToolResult.Failure(
+                text = "Failed: ${e.message ?: "tool error"}",
+                reason = "exception"
+            )
+        }
 }

@@ -1,6 +1,7 @@
 package com.example.mark.repository
 
 import com.example.mark.model.Task
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -21,16 +22,8 @@ class TaskRepository(
     /** One-time read (not a stream). Used by tool calls. */
     suspend fun getTasksOnce(onlyPending: Boolean = true): List<Task> {
         val snapshot = collection().get().await()
-        return snapshot.documents.mapNotNull { doc ->
-            Task(
-                id = doc.id,
-                title = doc.getString("title") ?: return@mapNotNull null,
-                description = doc.getString("description") ?: "",
-                dueDate = doc.getString("dueDate") ?: "",
-                isCompleted = doc.getBoolean("isCompleted") ?: false,
-                createdAt = doc.getLong("createdAt") ?: 0L
-            )
-        }.filter { if (onlyPending) !it.isCompleted else true }
+        return snapshot.documents.mapNotNull { it.toTask() }
+            .filter { if (onlyPending) !it.isCompleted else true }
     }
 
     /** Finds a pending task by title (case-insensitive) and marks it complete. */
@@ -65,15 +58,7 @@ class TaskRepository(
                             close(error)
                             return@addSnapshotListener
                         }
-                        val list = snapshot?.documents?.mapNotNull { doc ->
-                            Task(
-                                id = doc.id,
-                                title = doc.getString("title") ?: return@mapNotNull null,
-                                description = doc.getString("description") ?: "",
-                                isCompleted = doc.getBoolean("isCompleted") ?: false,
-                                createdAt = doc.getLong("createdAt") ?: 0L
-                            )
-                        } ?: emptyList()
+                        val list = snapshot?.documents?.mapNotNull { it.toTask() } ?: emptyList()
                         trySend(list)
                     }
                 awaitClose { registration.remove() }
@@ -99,6 +84,15 @@ class TaskRepository(
     suspend fun deleteTask(id: String) {
         collection().document(id).delete().await()
     }
+
+    private fun DocumentSnapshot.toTask(): Task? = Task(
+        id = id,
+        title = getString("title") ?: return null,
+        description = getString("description") ?: "",
+        dueDate = getString("dueDate") ?: "",
+        isCompleted = getBoolean("isCompleted") ?: false,
+        createdAt = getLong("createdAt") ?: 0L
+    )
 
     companion object {
         val instance: TaskRepository by lazy { TaskRepository() }

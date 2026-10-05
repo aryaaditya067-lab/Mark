@@ -54,4 +54,11 @@ class MarkWearableListenerService : WearableListenerService() {
             }
         }
     }
+
+    override fun onDestroy() {
+        // Only detaches the result listener CommandTransport registers on creation.
+        // In-flight commands keep running on [scope] and can still send their result.
+        transport.release()
+        super.onDestroy()
+    }
 }
