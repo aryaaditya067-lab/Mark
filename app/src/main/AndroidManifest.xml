@@ -145,6 +145,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".brief.BriefReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".reminder.ReminderBootReceiver"
             android:exported="true">
             <intent-filter>

@@ -38,6 +38,8 @@ fun SettingsScreen(
     val savedPlaces by settingsViewModel.savedPlaces.collectAsState()
     val userName by settingsViewModel.userName.collectAsState()
     val facts by settingsViewModel.facts.collectAsState()
+    val briefEnabled by settingsViewModel.briefEnabled.collectAsState()
+    val briefTime by settingsViewModel.briefTime.collectAsState()
     val laptopConfig by settingsViewModel.laptopConfig.collectAsState()
     val laptopStatus by settingsViewModel.laptopStatus.collectAsState()
     LaunchedEffect(Unit) { settingsViewModel.refreshFacts() }
@@ -221,6 +223,37 @@ fun SettingsScreen(
                 trailingIcon = {
                     if (workAddress != (savedPlaces["work"] ?: "")) {
                         IconButton(onClick = { settingsViewModel.savePlace("work", workAddress) }) {
+                            Icon(Icons.Default.Done, contentDescription = "Save")
+                        }
+                    }
+                }
+            )
+
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("Morning brief", style = MaterialTheme.typography.titleMedium)
+            var briefTimeInput by remember(briefTime) { mutableStateOf(briefTime) }
+            ListItem(
+                headlineContent = { Text("Daily brief notification") },
+                supportingContent = {
+                    Text("Weather, meetings, reminders and battery, with a heads-up 10 minutes before each meeting")
+                },
+                trailingContent = {
+                    Switch(
+                        checked = briefEnabled,
+                        onCheckedChange = { settingsViewModel.setBrief(context, it, briefTimeInput) }
+                    )
+                }
+            )
+            OutlinedTextField(
+                value = briefTimeInput,
+                onValueChange = { briefTimeInput = it },
+                label = { Text("Time (24-hour, e.g. 07:30)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                trailingIcon = {
+                    if (briefTimeInput != briefTime) {
+                        IconButton(onClick = { settingsViewModel.setBrief(context, briefEnabled, briefTimeInput) }) {
                             Icon(Icons.Default.Done, contentDescription = "Save")
                         }
                     }

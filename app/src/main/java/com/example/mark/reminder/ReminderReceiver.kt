@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import com.example.mark.MainActivity
 import com.example.mark.utils.ReminderTimes
+import kotlinx.coroutines.launch
 
 /**
  * Fires a reminder as a notification with Done and Snooze actions. Phone
@@ -96,6 +97,11 @@ class ReminderBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             AndroidReminders(context).rescheduleAll()
+            val pending = goAsync()
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                try { runCatching { com.example.mark.brief.MorningBrief.schedule(context.applicationContext) } }
+                finally { pending.finish() }
+            }
         }
     }
 }

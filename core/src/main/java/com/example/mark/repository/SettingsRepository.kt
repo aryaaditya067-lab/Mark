@@ -21,6 +21,8 @@ class SettingsRepository(private val context: Context) {
         val VOICE_NAME = stringPreferencesKey("tts_voice_name")
         val SAVED_PLACES = stringPreferencesKey("saved_places")
         val USER_NAME = stringPreferencesKey("user_name")
+        val BRIEF_ENABLED = booleanPreferencesKey("brief_enabled")
+        val BRIEF_TIME = stringPreferencesKey("brief_time")
     }
 
     private val gson = com.google.gson.Gson()
@@ -68,6 +70,21 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setUserName(name: String) {
         context.dataStore.edit { it[Keys.USER_NAME] = name.trim() }
+    }
+
+    /** Daily brief notification; off until the user turns it on. */
+    val briefEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.BRIEF_ENABLED] ?: false }
+
+    /** "HH:mm", local time. */
+    val briefTime: Flow<String> =
+        context.dataStore.data.map { it[Keys.BRIEF_TIME] ?: "07:30" }
+
+    suspend fun setBrief(enabled: Boolean, time: String) {
+        context.dataStore.edit {
+            it[Keys.BRIEF_ENABLED] = enabled
+            it[Keys.BRIEF_TIME] = time
+        }
     }
 
     /**

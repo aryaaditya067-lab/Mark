@@ -37,6 +37,10 @@ class MarkApplication : Application() {
 
         // Warm up ContactRepository and OpenAppTool on Dispatchers.IO
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            // Daily brief alarm and today's meeting heads-ups (alarms do not survive
+            // force-stops, and meetings may have been added since the last brief).
+            runCatching { com.example.mark.brief.MorningBrief.schedule(applicationContext) }
+            runCatching { com.example.mark.brief.MorningBrief.refreshHeadsUps(applicationContext) }
             ContactRepository.getInstance(applicationContext).tryRefresh()
             // OpenAppTool is a singleton accessed via MarkAssistant, 
             // and it pre-warms its cache in its init block.

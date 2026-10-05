@@ -27,6 +27,20 @@ class SettingsViewModel(
     private val laptop: LaptopTool? = null
 ) : ViewModel() {
 
+    // ---- Morning brief ----
+
+    val briefEnabled: StateFlow<Boolean> = repository.briefEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val briefTime: StateFlow<String> = repository.briefTime
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "07:30")
+
+    /** Saves and re-arms the daily alarm; [time] must be HH:mm. */
+    fun setBrief(context: android.content.Context, enabled: Boolean, time: String) = viewModelScope.launch {
+        val valid = runCatching { java.time.LocalTime.parse(time) }.isSuccess
+        repository.setBrief(enabled, if (valid) time else briefTime.value)
+        com.example.mark.brief.MorningBrief.schedule(context.applicationContext)
+    }
+
     // ---- Laptop ----
 
     private val _laptopConfig = MutableStateFlow(laptop?.config() ?: LaptopTool.Config("", "", ""))
