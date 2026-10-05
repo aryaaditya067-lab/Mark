@@ -155,6 +155,17 @@ class AssistantController(
                 (type in REMOTE_UNLESS_WATCH_TARGET && params["target"] != "watch")
             )
 
+    /**
+     * How long to wait for the phone. 5 s suits phone actions, but the laptop
+     * agent alone may take 6 s, and waking the laptop waits up to 30 s, so
+     * those used to time out on the watch while actually succeeding.
+     */
+    private fun remoteTimeoutMs(type: IntentType, params: Map<String, String>): Long = when {
+        type == IntentType.LAPTOP_CONTROL && params["action"] == "wake" -> 40_000L
+        type == IntentType.LAPTOP_CONTROL -> 9_000L
+        else -> 5_000L
+    }
+
     /** Runs an intent wherever it belongs: here, or on the phone over the Data Layer. */
     private suspend fun executeAnywhere(type: IntentType, params: Map<String, String>, rawInput: String?): ToolResult =
         if (runsOnPhone(type, params)) sendRemote(type, params + ("raw_input" to (rawInput ?: "")))
@@ -312,7 +323,9 @@ class AssistantController(
             val commandId = UUID.randomUUID().toString()
             val command = Command(id = commandId, type = intent.type, params = intent.params + ("raw_input" to userText))
             if (transport.sendCommand(command)) {
-                val result = withTimeoutOrNull(5000) { transport.results.filter { it.commandId == commandId }.first() }
+                val result = withTimeoutOrNull(remoteTimeoutMs(intent.type, intent.params)) {
+                    transport.results.filter { it.commandId == commandId }.first()
+                }
                 if (result != null) {
                     if (intent.type == IntentType.CALL_CONTACT) {
                         handleCallResolution(result.data, result.text)
@@ -667,7 +680,9 @@ class AssistantController(
         val commandId = UUID.randomUUID().toString()
         val command = Command(id = commandId, type = type, params = params)
         if (transport.sendCommand(command)) {
-            val result = withTimeoutOrNull(5000) { transport.results.filter { it.commandId == commandId }.first() }
+            val result = withTimeoutOrNull(remoteTimeoutMs(type, params)) {
+                transport.results.filter { it.commandId == commandId }.first()
+            }
             if (result != null) {
                 return if (result.success) ToolResult.Success(result.text, result.data)
                 else ToolResult.Failure(result.text, reason = "remote_failure")

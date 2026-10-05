@@ -6,12 +6,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.core.content.ContextCompat
+import com.example.mark.assistant.PhoneToolSchemas
 import com.example.mark.assistant.Tool
 import com.example.mark.assistant.ToolRequest
 import com.example.mark.assistant.ToolResult
-import com.example.mark.network.FunctionDef
-import com.example.mark.network.Parameters
-import com.example.mark.network.Property
 import com.example.mark.repository.Contact
 import com.example.mark.repository.ContactRepository
 import com.example.mark.router.IntentType
@@ -56,14 +54,7 @@ abstract class BaseCommunicationTool(protected val context: Context) : Tool {
 class CallTool(context: Context) : BaseCommunicationTool(context) {
     override val name = "call_contact"
     override val intent = IntentType.CALL_CONTACT
-    override val definition = FunctionDef(
-        name = name,
-        description = "Resolve a contact name for calling.",
-        parameters = Parameters(
-            properties = mapOf("contact" to Property("string", "Name of the person to call")),
-            required = listOf("contact")
-        )
-    )
+    override val definition = PhoneToolSchemas.CALL_CONTACT
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         if (!hasPermission(Manifest.permission.CALL_PHONE) || !hasPermission(Manifest.permission.READ_CONTACTS)) {
@@ -119,14 +110,7 @@ class CallTool(context: Context) : BaseCommunicationTool(context) {
 class CallExecuteTool(private val context: Context) : Tool {
     override val name = "call_execute"
     override val intent = IntentType.CALL_EXECUTE
-    override val definition = FunctionDef(
-        name = name,
-        description = "Dial a number immediately.",
-        parameters = Parameters(
-            properties = mapOf("number" to Property("string", "The phone number to dial")),
-            required = listOf("number")
-        )
-    )
+    override val definition = PhoneToolSchemas.CALL_EXECUTE
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         val number = request.string("number") ?: return ToolResult.Failure("No number provided.", reason = "missing_arg")
@@ -152,17 +136,7 @@ class CallExecuteTool(private val context: Context) : Tool {
 class SmsTool(context: Context) : BaseCommunicationTool(context) {
     override val name = "send_sms"
     override val intent = IntentType.SEND_SMS
-    override val definition = FunctionDef(
-        name = name,
-        description = "Resolve a contact for messaging.",
-        parameters = Parameters(
-            properties = mapOf(
-                "contact" to Property("string", "Recipient name"),
-                "message_body" to Property("string", "The message text")
-            ),
-            required = listOf("contact", "message_body")
-        )
-    )
+    override val definition = PhoneToolSchemas.SEND_SMS
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         android.util.Log.d("MarkSms", "permission=${ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS)}")
@@ -239,18 +213,7 @@ class SmsTool(context: Context) : BaseCommunicationTool(context) {
 class SmsExecuteTool(private val context: Context) : Tool {
     override val name = "sms_execute"
     override val intent = IntentType.SMS_EXECUTE
-    override val definition = FunctionDef(
-        name = name,
-        description = "Send message immediately.",
-        parameters = Parameters(
-            properties = mapOf(
-                "number" to Property("string", "The recipient number"),
-                "body" to Property("string", "The message text"),
-                "app" to Property("string", "sms or whatsapp")
-            ),
-            required = listOf("number", "body")
-        )
-    )
+    override val definition = PhoneToolSchemas.SMS_EXECUTE
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         val number = request.string("number") ?: return ToolResult.Failure("No number.", reason = "missing_arg")

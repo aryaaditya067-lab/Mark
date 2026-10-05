@@ -3,11 +3,10 @@ package com.example.mark.tool
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import com.example.mark.assistant.PhoneToolSchemas
 import com.example.mark.assistant.Tool
 import com.example.mark.assistant.ToolRequest
 import com.example.mark.assistant.ToolResult
-import com.example.mark.network.FunctionDef
-import com.example.mark.network.Parameters
 import com.example.mark.router.IntentType
 import com.example.mark.service.MarkNotificationService
 
@@ -37,11 +36,7 @@ abstract class BaseNotificationTool(protected val context: Context) : Tool {
 class ReadNotificationsTool(context: Context) : BaseNotificationTool(context) {
     override val name = "read_notifications"
     override val intent = IntentType.READ_NOTIFICATIONS
-    override val definition = FunctionDef(
-        name = name,
-        description = "Summarize and read recent notifications",
-        parameters = Parameters(properties = emptyMap())
-    )
+    override val definition = PhoneToolSchemas.READ_NOTIFICATIONS
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         checkEnabled()?.let { return it }
@@ -64,11 +59,7 @@ class ReadNotificationsTool(context: Context) : BaseNotificationTool(context) {
 class ReadLastMessageTool(context: Context) : BaseNotificationTool(context) {
     override val name = "read_last_message"
     override val intent = IntentType.READ_LAST_MESSAGE
-    override val definition = FunctionDef(
-        name = name,
-        description = "Read the most recent message from a messaging app",
-        parameters = Parameters(properties = emptyMap())
-    )
+    override val definition = PhoneToolSchemas.READ_LAST_MESSAGE
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         checkEnabled()?.let { return it }
@@ -83,11 +74,7 @@ class ReadLastMessageTool(context: Context) : BaseNotificationTool(context) {
 class CheckNewMessagesTool(context: Context) : BaseNotificationTool(context) {
     override val name = "check_new_messages"
     override val intent = IntentType.CHECK_NEW_MESSAGES
-    override val definition = FunctionDef(
-        name = name,
-        description = "Count unread messaging notifications",
-        parameters = Parameters(properties = emptyMap())
-    )
+    override val definition = PhoneToolSchemas.CHECK_NEW_MESSAGES
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         checkEnabled()?.let { return it }
@@ -100,11 +87,7 @@ class CheckNewMessagesTool(context: Context) : BaseNotificationTool(context) {
 class UnreadCountTool(context: Context) : BaseNotificationTool(context) {
     override val name = "unread_count"
     override val intent = IntentType.UNREAD_COUNT
-    override val definition = FunctionDef(
-        name = name,
-        description = "Total count of all unread notifications",
-        parameters = Parameters(properties = emptyMap())
-    )
+    override val definition = PhoneToolSchemas.UNREAD_COUNT
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         checkEnabled()?.let { return it }

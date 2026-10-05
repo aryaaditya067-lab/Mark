@@ -3,11 +3,10 @@ package com.example.mark.tools
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import com.example.mark.assistant.PhoneToolSchemas
 import com.example.mark.assistant.Tool
 import com.example.mark.assistant.ToolRequest
 import com.example.mark.assistant.ToolResult
-import com.example.mark.network.FunctionDef
-import com.example.mark.network.Parameters
 import com.example.mark.router.IntentType
 import com.example.mark.service.MarkAccessibilityService
 
@@ -16,11 +15,7 @@ class HomeTool(private val context: Context) : Tool {
     override val name = "go_home"
     override val intent = IntentType.GO_HOME
 
-    override val definition = FunctionDef(
-        name = name,
-        description = "Go to the home screen (close the current app).",
-        parameters = Parameters(properties = emptyMap())
-    )
+    override val definition = PhoneToolSchemas.GO_HOME
 
     override suspend fun execute(request: ToolRequest): ToolResult {
         if (!MarkAccessibilityService.isEnabled) {

@@ -123,15 +123,17 @@ object MarkAssistant {
             add(timeTool)
             add(TimeTool.TimerQuery(timeTool))
             add(OpenAppTool(appContext))
-            if (!isWatch) {
-                add(LaptopTool(appContext))
-            }
-            
-            // Only add tools added via extraTools to specific modules.
+            // On the watch this is only ever a schema: LAPTOP_CONTROL always runs
+            // on the phone, so the call is forwarded rather than executed here.
+            add(LaptopTool(appContext))
         } + extraTools
 
+        // The watch's LLM can use every phone tool too; each call is carried to
+        // the phone by intent, with the same spoken-yes gate.
+        val allTools = if (isWatch) tools + PhoneToolSchemas.remoteTools(tools.map { it.name }.toSet()) else tools
+
         return AssistantController(
-            toolManager = ToolManager(ToolRegistry(tools)),
+            toolManager = ToolManager(ToolRegistry(allTools)),
             isWatch = isWatch,
             transport = if (isWatch) CommandTransport(appContext) else null,
             memory = memory,
