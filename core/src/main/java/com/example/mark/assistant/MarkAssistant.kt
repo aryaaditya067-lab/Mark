@@ -34,6 +34,7 @@ import com.example.mark.utils.DeviceSituation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import com.example.mark.tools.ForgetFactTool
 import com.example.mark.tools.RememberFactTool
 import com.example.mark.utils.LazyLocationProvider
@@ -87,12 +88,15 @@ object MarkAssistant {
         val isWatch = pm.hasSystemFeature(PackageManager.FEATURE_WATCH)
         val memory = memory(appContext)
         val situation = CachedSituation(
-            DeviceSituation(
-                appContext,
-                isWatch = isWatch,
-                settings = SettingsRepository(appContext),
-                tasks = if (isWatch) null else TaskRepository.instance
-            ),
+            SettingsRepository(appContext).let { settings ->
+                DeviceSituation(
+                    appContext,
+                    isWatch = isWatch,
+                    shareSchedule = { settings.shareSchedule.first() },
+                    settings = settings,
+                    tasks = if (isWatch) null else TaskRepository.instance
+                )
+            },
             CoroutineScope(SupervisorJob() + Dispatchers.IO)
         ).also { situationCache = it }
 

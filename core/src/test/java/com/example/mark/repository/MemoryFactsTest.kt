@@ -48,4 +48,14 @@ class MemoryFactsTest {
         assertEquals("f21", prompt.first())
         assertEquals("f60", prompt.last())
     }
+
+    @Test
+    fun matchesWholeWordsOnly() {
+        val facts = listOf(
+            fact("His car keys are in the top drawer", 1),
+            fact("His brother Oscar lives in Pune", 2),
+            fact("His credit card reminder is in the blue diary", 3),
+        )
+        assertEquals(listOf("His car keys are in the top drawer"), MemoryFacts.matching(facts, "car").map { it.text })
+    }
 }

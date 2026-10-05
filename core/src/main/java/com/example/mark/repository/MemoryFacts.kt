@@ -28,10 +28,13 @@ object MemoryFacts {
      * keeps "forget my car keys" from wiping every fact that mentions "my".
      */
     fun matching(facts: List<MemoryFact>, query: String): List<MemoryFact> {
-        val words = query.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 2 }
+        val words = words(query).filter { it.length > 2 }
         if (words.isEmpty()) return emptyList()
-        return facts.filter { fact -> val text = fact.text.lowercase(); words.all { it in text } }
+        // Whole words: "car" must not match "Oscar" or "card".
+        return facts.filter { fact -> val factWords = words(fact.text).toSet(); words.all { it in factWords } }
     }
+
+    private fun words(text: String) = text.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
 
     /** Adds [fact], keeping at most [MAX_FACTS] by dropping the oldest. */
     fun withAdded(existing: List<MemoryFact>, fact: MemoryFact): List<MemoryFact> =

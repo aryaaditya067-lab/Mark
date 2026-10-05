@@ -32,8 +32,10 @@ class DndTool(private val context: Context) : Tool {
             ?: return ToolResult.Failure("Notification service not available.", reason = "service_error")
 
         if (!manager.isNotificationPolicyAccessGranted) {
-            // Take the user straight to the switch rather than just refusing.
-            val opened = runCatching {
+            // Take the user straight to the switch rather than just refusing. From
+            // the background (e.g. a command sent by the watch) Android silently
+            // blocks the launch, so only claim it when Mark is in the foreground.
+            val opened = inForeground() && runCatching {
                 context.startActivity(
                     android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
                         .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -41,7 +43,7 @@ class DndTool(private val context: Context) : Tool {
             }.isSuccess
             return ToolResult.Failure(
                 if (opened) "I need Do Not Disturb access. I've opened the setting, sir: turn on Mark."
-                else "Do Not Disturb permission not granted. Please enable it in system settings.",
+                else "I need Do Not Disturb access, sir. Open Mark on your phone, Settings, Do Not Disturb access.",
                 reason = "no_permission"
             )
         }
@@ -62,5 +64,11 @@ class DndTool(private val context: Context) : Tool {
         } catch (e: Exception) {
             ToolResult.Failure("Failed to change DND mode: ${e.message}", reason = "hardware_error")
         }
+    }
+
+    private fun inForeground(): Boolean {
+        val info = android.app.ActivityManager.RunningAppProcessInfo()
+        android.app.ActivityManager.getMyMemoryState(info)
+        return info.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
     }
 }

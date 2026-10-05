@@ -39,6 +39,7 @@ fun SettingsScreen(
     val userName by settingsViewModel.userName.collectAsState()
     val facts by settingsViewModel.facts.collectAsState()
     val announceMessages by settingsViewModel.announceMessages.collectAsState()
+    val shareSchedule by settingsViewModel.shareSchedule.collectAsState()
     val briefEnabled by settingsViewModel.briefEnabled.collectAsState()
     val briefTime by settingsViewModel.briefTime.collectAsState()
     val laptopConfig by settingsViewModel.laptopConfig.collectAsState()
@@ -180,10 +181,19 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             Text("What Mark remembers", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Say \"Mark, yaad rakhna ...\" to add, or delete here. Your name and these facts " +
-                    "are sent to the AI service with your questions.",
+                "Say \"Mark, yaad rakhna ...\" to add, or delete here. With every question, the AI " +
+                    "service (Xiaomi MiMo) receives your name, these facts, your battery level and, if " +
+                    "allowed below, your next meetings and pending tasks; plus whatever a tool reads for " +
+                    "that question (messages, contacts, notifications).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+            )
+            ListItem(
+                headlineContent = { Text("Share calendar and tasks with the AI") },
+                supportingContent = { Text("Lets Mark mention your next meeting or pending tasks without being asked") },
+                trailingContent = {
+                    Switch(checked = shareSchedule, onCheckedChange = { settingsViewModel.setShareSchedule(it) })
+                }
             )
             if (facts.isEmpty()) {
                 Text(
@@ -305,6 +315,7 @@ fun SettingsScreen(
                 onValueChange = { laptopToken = it },
                 label = { Text("Agent token") },
                 singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             )
             OutlinedTextField(

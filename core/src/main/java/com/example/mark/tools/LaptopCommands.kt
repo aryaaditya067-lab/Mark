@@ -3,8 +3,19 @@ package com.example.mark.tools
 /** Pure helpers for the laptop tool, kept free of Android so they can be tested. */
 object LaptopCommands {
 
-    /** Actions that end the user's session on the laptop; they need a spoken yes. */
+    /** Actions that end the user's session on the laptop. */
     val DESTRUCTIVE = setOf("shutdown", "restart", "logoff")
+
+    /**
+     * When the LLM (not the user's own spoken command) asks for these, a
+     * spoken yes is needed: they type, move data, run builds or change state,
+     * and the request may have been planted by text the model read in a
+     * message, web page or calendar invite.
+     */
+    val NEEDS_YES_FROM_LLM = DESTRUCTIVE + setOf(
+        "type", "clipboard_set", "clipboard_get", "gradle", "screen_record",
+        "wifi", "lock", "sleep", "screen_off", "close"
+    )
 
     /** Actions whose meaning lives in free text (a search, something to type). */
     val NEEDS_PAYLOAD = setOf("browser", "type", "clipboard_set")

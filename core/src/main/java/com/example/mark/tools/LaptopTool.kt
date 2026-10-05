@@ -27,7 +27,11 @@ import org.json.JSONObject
  * most of the day, so every call is short-timeout and failure is a normal,
  * spoken answer — not an error.
  */
-class LaptopTool(private val context: Context) : Tool {
+class LaptopTool(context: Context) : Tool {
+
+    // Application context only: Settings creates this from an Activity, and the
+    // ViewModel holding it outlives configuration changes.
+    private val context: Context = context.applicationContext
 
     override val name = "laptop_control"
 
@@ -60,9 +64,9 @@ class LaptopTool(private val context: Context) : Tool {
         )
     )
 
-    /** Ending the user's session on the laptop needs a spoken yes. */
+    /** LLM-chosen actions that change something on the laptop need a spoken yes. */
     override fun needsConfirmation(request: ToolRequest): Boolean =
-        request.string("action")?.lowercase() in LaptopCommands.DESTRUCTIVE
+        request.string("action")?.lowercase() in LaptopCommands.NEEDS_YES_FROM_LLM
 
     data class Config(val host: String, val token: String, val mac: String)
 
@@ -115,6 +119,11 @@ class LaptopTool(private val context: Context) : Tool {
         }
 
         val action = request.string("action") ?: "status"
+        // A private address on mobile data or someone else's Wi-Fi is not your
+        // laptop; the token must not go to whoever answers there.
+        if (!onLocalNetwork()) {
+            return ToolResult.Failure("I only talk to the laptop over Wi-Fi, sir.", reason = "not_lan")
+        }
         if (action == "wake") return wake(host, token)
 
         // The resolver's laptop rule has two alternatives (laptop-first and
@@ -136,15 +145,16 @@ class LaptopTool(private val context: Context) : Tool {
             (request.string("text") ?: payload.takeIf { action != "browser" })?.let { put("text", it) }
             (request.string("query") ?: payload.takeIf { action == "browser" })?.let { put("query", it) }
             request.string("task")?.let { put("task", it) }
-            request.rawInput?.let { put("raw_input", it) }
         }
 
         val result = try {
             withTimeoutOrNull(OVERALL_TIMEOUT_MS) { post(host, token, body.toString()) }
-        } catch (e: IllegalArgumentException) {
+        } catch (e: LanHttp.NotPrivateException) {
             return ToolResult.Failure(
-                "The laptop address in settings isn't on your home network, sir.", reason = "not_lan"
+                "The laptop address in settings isn't a home-network address, sir.", reason = "not_lan"
             )
+        } catch (e: IllegalArgumentException) {
+            return ToolResult.Failure("The laptop agent sent a reply I couldn't read.", reason = "agent_error")
         } catch (e: java.io.IOException) {
             null
         }
@@ -184,6 +194,13 @@ class LaptopTool(private val context: Context) : Tool {
             headers = mapOf("X-Mark-Token" to token),
             connectTimeoutMs = CONNECT_TIMEOUT_MS, readTimeoutMs = READ_TIMEOUT_MS
         )
+
+    private fun onLocalNetwork(): Boolean {
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
 
     /** Wake-on-LAN, then wait for the agent to answer so Mark can say it is up. */
     private suspend fun wake(host: String, token: String): ToolResult {

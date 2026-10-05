@@ -27,6 +27,16 @@ class SettingsViewModel(
     private val laptop: LaptopTool? = null
 ) : ViewModel() {
 
+    // ---- Privacy ----
+
+    val shareSchedule: StateFlow<Boolean> = repository.shareSchedule
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    fun setShareSchedule(enabled: Boolean) = viewModelScope.launch {
+        repository.setShareSchedule(enabled)
+        MarkAssistant.refreshSituation()
+    }
+
     // ---- Messages ----
 
     val announceMessages: StateFlow<Boolean> = repository.announceMessages

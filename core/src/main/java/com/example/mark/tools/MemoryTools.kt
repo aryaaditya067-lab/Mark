@@ -9,6 +9,7 @@ import com.example.mark.network.Parameters
 import com.example.mark.network.Property
 import com.example.mark.repository.MemoryFacts
 import com.example.mark.repository.MemoryStore
+import com.example.mark.router.IntentType
 
 /**
  * Long-term memory. LLM-only (no offline intent): turning "yaad rakhna, meri
@@ -47,6 +48,12 @@ class RememberFactTool(private val store: MemoryStore) : Tool {
 class ForgetFactTool(private val store: MemoryStore) : Tool {
 
     override val name = "forget_fact"
+
+    // Deleting memories is permanent, and the request may come from injected
+    // text, so it waits for a spoken yes (which needs an intent to replay).
+    override val intent = IntentType.FORGET_FACT
+
+    override fun needsConfirmation(request: ToolRequest) = true
 
     override val definition = FunctionDef(
         name = name,

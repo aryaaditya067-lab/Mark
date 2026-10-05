@@ -25,6 +25,7 @@ object ConfirmationText {
                 val detail = (p["text"] ?: p["query"] ?: p["app"])?.let { " ($it)" }.orEmpty()
                 "Shall I run ${p["action"].orEmpty().replace('_', ' ')} on the laptop$detail? Say yes or no."
             }
+            IntentType.FORGET_FACT -> "Shall I forget what I remembered about \"${p["query"].orEmpty()}\"? Say yes or no."
             else -> "Shall I go ahead with ${intent.type.name.lowercase().replace('_', ' ')}? Say yes or no."
         }
     }

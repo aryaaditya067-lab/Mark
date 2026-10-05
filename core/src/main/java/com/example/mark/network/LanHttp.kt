@@ -20,6 +20,9 @@ import java.net.Socket
  */
 object LanHttp {
 
+    /** The host is not a private address; distinct from a malformed reply. */
+    class NotPrivateException(host: String) : IllegalArgumentException("$host is not on the local network")
+
     fun isPrivate(address: InetAddress): Boolean =
         address.isSiteLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||
             (address is Inet6Address && (address.address[0].toInt() and 0xfe) == 0xfc) // fc00::/7
@@ -35,7 +38,7 @@ object LanHttp {
         readTimeoutMs: Int = 4000,
     ): Pair<Int, String> = withContext(Dispatchers.IO) {
         val address = InetAddress.getByName(host)
-        require(isPrivate(address)) { "$host is not on the local network" }
+        if (!isPrivate(address)) throw NotPrivateException(host)
         Socket().use { socket ->
             socket.connect(InetSocketAddress(address, port), connectTimeoutMs)
             socket.soTimeout = readTimeoutMs

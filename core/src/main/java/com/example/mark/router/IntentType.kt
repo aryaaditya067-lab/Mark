@@ -49,7 +49,8 @@ enum class IntentType {
     LIST_REMINDERS,
     CANCEL_REMINDER,
     READ_CONVERSATION,
-    REPLY_MESSAGE
+    REPLY_MESSAGE,
+    FORGET_FACT
 }
 
 enum class ReplyMode { SILENT_CONFIRM, SPEAK }

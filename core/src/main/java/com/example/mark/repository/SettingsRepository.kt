@@ -24,6 +24,7 @@ class SettingsRepository(private val context: Context) {
         val BRIEF_ENABLED = booleanPreferencesKey("brief_enabled")
         val BRIEF_TIME = stringPreferencesKey("brief_time")
         val ANNOUNCE_MESSAGES = booleanPreferencesKey("announce_messages")
+        val SHARE_SCHEDULE = booleanPreferencesKey("share_schedule")
     }
 
     private val gson = com.google.gson.Gson()
@@ -71,6 +72,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setUserName(name: String) {
         context.dataStore.edit { it[Keys.USER_NAME] = name.trim() }
+    }
+
+    /** Whether calendar and task titles are included with every AI question. */
+    val shareSchedule: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.SHARE_SCHEDULE] ?: true }
+
+    suspend fun setShareSchedule(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SHARE_SCHEDULE] = enabled }
     }
 
     /** Speak new chat messages into headphones; off unless the user turns it on. */

@@ -29,6 +29,8 @@ import java.util.Locale
 class DeviceSituation(
     context: Context,
     private val isWatch: Boolean,
+    /** Calendar and task titles go to the LLM only while this is on (Settings). */
+    private val shareSchedule: suspend () -> Boolean = { true },
     private val settings: SettingsRepository?,
     private val tasks: TaskRepository?,
 ) : SituationProvider {
@@ -39,8 +41,8 @@ class DeviceSituation(
         listOfNotNull(
             runCatching { userName() }.getOrNull(),
             runCatching { battery() }.getOrNull(),
-            runCatching { if (isWatch) null else nextEvents() }.getOrNull(),
-            runCatching { pendingTasks() }.getOrNull(),
+            runCatching { if (isWatch || !shareSchedule()) null else nextEvents() }.getOrNull(),
+            runCatching { if (shareSchedule()) pendingTasks() else null }.getOrNull(),
         )
     }
 
@@ -78,7 +80,7 @@ class DeviceSituation(
             while (c.moveToNext() && events.size < 2) {
                 val title = c.getString(0)?.takeIf { it.isNotBlank() } ?: continue
                 if (c.getInt(2) == 1) continue // all-day entries are not "next"
-                events += "$title ${describe(c.getLong(1))}"
+                events += "${clip(title)} ${describe(c.getLong(1))}"
             }
         }
         return if (events.isEmpty()) "No more calendar events in the next day and a half."
@@ -90,10 +92,13 @@ class DeviceSituation(
         val pending = repo.getTasksOnce(onlyPending = true)
         return when (pending.size) {
             0 -> "No pending tasks."
-            else -> "Pending tasks: ${pending.size} (" + pending.take(3).joinToString(", ") { it.title } +
+            else -> "Pending tasks: ${pending.size} (" + pending.take(3).joinToString(", ") { clip(it.title) } +
                 (if (pending.size > 3) ", ..." else "") + ")."
         }
     }
+
+    /** Titles come from other people (invites) too: one short line each, nothing more. */
+    private fun clip(title: String) = title.replace(Regex("\\s+"), " ").trim().take(60)
 
     private fun describe(millis: Long): String {
         val zone = ZoneId.systemDefault()
