@@ -128,6 +128,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         _uiState.update { it.copy(inputText = "", isLoading = true, errorMessage = null) }
 
+        // A new question supersedes the reply being spoken; also closes its
+        // TTS stream so the speaking state cannot stay stuck on.
+        tts.stop()
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
             var fullReply = ""

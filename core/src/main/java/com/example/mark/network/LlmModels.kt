@@ -79,13 +79,15 @@ data class Property(
 )
 
 // --- Streaming ---
+// Everything nullable: Gson fills absent fields with null regardless of Kotlin
+// types, and servers do send chunks without choices (e.g. a final usage chunk).
 
 data class LlmStreamResponse(
-    val choices: List<LlmStreamChoice>
+    val choices: List<LlmStreamChoice>?
 )
 
 data class LlmStreamChoice(
-    val delta: LlmStreamDelta,
+    val delta: LlmStreamDelta?,
     @SerializedName("finish_reason") val finishReason: String?
 )
 
@@ -96,7 +98,7 @@ data class LlmStreamDelta(
 )
 
 data class ToolCallDelta(
-    val index: Int,
+    val index: Int?,
     val id: String?,
     val function: FunctionCallDelta?
 )

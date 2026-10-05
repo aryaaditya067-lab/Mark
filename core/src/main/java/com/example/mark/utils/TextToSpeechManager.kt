@@ -26,12 +26,26 @@ class TextToSpeechManager(context: Context) {
     private var desiredVoiceName: String? = null
 
     private val _isSpeaking = MutableStateFlow(false)
+
+    /**
+     * True from the first queued utterance until the last one finishes AND the
+     * reply stream is closed. Tracking single utterances made this flicker to
+     * false between sentences of a streamed reply — and the watch treats that
+     * edge as "reply finished", restarts the mic and cuts the rest off.
+     */
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
 
+    private val inFlight = mutableSetOf<String>()
+    @Volatile private var streamOpen = false
+    private var utteranceCounter = 0
+
     private var buffer = ""
-    private val MIN_SENTENCE_LENGTH = 80 // characters
+    private var spokeThisStream = false
 
     private companion object {
+        const val FIRST_SENTENCE_LENGTH = 12
+        const val BATCH_SENTENCE_LENGTH = 80
+
         /**
          * Deterministic voice pick, most-wanted first. Google's voice names never
          * contain the word "male" — the variant code is the only reliable signal.
@@ -92,13 +106,10 @@ class TextToSpeechManager(context: Context) {
                     override fun onStart(utteranceId: String?) {
                         _isSpeaking.value = true
                     }
-                    override fun onDone(utteranceId: String?) {
-                        _isSpeaking.value = false
-                    }
+                    override fun onDone(utteranceId: String?) = finished(utteranceId)
                     @Deprecated("deprecated")
-                    override fun onError(utteranceId: String?) {
-                        _isSpeaking.value = false
-                    }
+                    override fun onError(utteranceId: String?) = finished(utteranceId)
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) = finished(utteranceId)
                 })
 
                 pending?.let { speak(it) }
@@ -134,12 +145,13 @@ class TextToSpeechManager(context: Context) {
             return
         }
 
-        forceMaxVolume()
-
-        val params = Bundle().apply {
-            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+        // A one-shot reply replaces whatever was queued or streaming.
+        synchronized(inFlight) {
+            inFlight.clear()
+            streamOpen = false
+            buffer = ""
         }
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "mark_reply")
+        enqueue(text, TextToSpeech.QUEUE_FLUSH)
     }
 
     /**
@@ -148,44 +160,72 @@ class TextToSpeechManager(context: Context) {
      */
     fun speakStream(chunk: String) {
         if (!ready) return
+        if (!streamOpen) {
+            streamOpen = true
+            spokeThisStream = false
+            _isSpeaking.value = true
+        }
         buffer += chunk
 
-        // Look for sentence boundaries: . ! ?
-        val lastPunch = buffer.lastIndexOfAny(listOf(".", "!", "?", "\n"))
-        if (lastPunch != -1 && lastPunch >= MIN_SENTENCE_LENGTH) {
-            val toSpeak = buffer.substring(0, lastPunch + 1).trim()
+        // The first sentence goes out as soon as it is complete, so the reply
+        // starts quickly; later ones are batched for smoother prosody.
+        val minLength = if (spokeThisStream) BATCH_SENTENCE_LENGTH else FIRST_SENTENCE_LENGTH
+        val cut = SpeechChunker.cutPoint(buffer, minLength)
+        if (cut > 0) {
+            val toSpeak = buffer.substring(0, cut).trim()
+            buffer = buffer.substring(cut)
             if (toSpeak.isNotBlank()) {
-                forceMaxVolume()
-                val params = Bundle().apply {
-                    putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-                }
-                tts?.speak(toSpeak, TextToSpeech.QUEUE_ADD, params, "mark_tts_${System.currentTimeMillis()}")
-                buffer = buffer.substring(lastPunch + 1)
+                spokeThisStream = true
+                enqueue(toSpeak, TextToSpeech.QUEUE_ADD)
             }
         }
     }
 
     /**
-     * Flush any remaining text in the stream buffer.
+     * Flush any remaining text in the stream buffer and close the stream.
      */
     fun finalizeStream() {
-        if (buffer.isNotBlank()) {
-            forceMaxVolume()
-            val params = Bundle().apply {
-                putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-            }
-            tts?.speak(buffer.trim(), TextToSpeech.QUEUE_ADD, params, "mark_tts_final")
-            buffer = ""
-        }
+        val rest = buffer.trim()
+        buffer = ""
+        if (rest.isNotBlank()) enqueue(rest, TextToSpeech.QUEUE_ADD)
+        streamOpen = false
+        settle()
     }
 
     /**
      * Stops any current speech.
      */
     fun stop() {
-        buffer = ""
+        synchronized(inFlight) {
+            inFlight.clear()
+            streamOpen = false
+            buffer = ""
+        }
         tts?.stop()
         _isSpeaking.value = false
+    }
+
+    private fun enqueue(text: String, mode: Int) {
+        forceMaxVolume()
+        val params = Bundle().apply {
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+        }
+        val id = "mark_tts_${utteranceCounter++}"
+        synchronized(inFlight) { inFlight.add(id) }
+        _isSpeaking.value = true
+        val result = tts?.speak(text, mode, params, id)
+        if (result != TextToSpeech.SUCCESS) finished(id)
+    }
+
+    private fun finished(utteranceId: String?) {
+        synchronized(inFlight) { utteranceId?.let { inFlight.remove(it) } }
+        settle()
+    }
+
+    /** Speaking ends only when nothing is queued and no more text is coming. */
+    private fun settle() {
+        val idle = synchronized(inFlight) { inFlight.isEmpty() && !streamOpen }
+        if (idle) _isSpeaking.value = false
     }
 
     /**

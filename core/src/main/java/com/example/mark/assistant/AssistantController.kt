@@ -72,6 +72,9 @@ class AssistantController(
 
         private const val WATCH_HISTORY_CAP = 4 * Constants.MAX_HISTORY_MESSAGES
 
+        /** Tool rounds per question before the model must answer in words. */
+        private const val MAX_TOOL_ROUNDS = 5
+
         // Intents that ALWAYS run on the phone when spoken from the watch.
         private val ALWAYS_REMOTE = setOf(
             IntentType.TOGGLE_FLASHLIGHT, IntentType.SET_DND, IntentType.GET_CALENDAR, IntentType.RING_PHONE,
@@ -104,6 +107,19 @@ class AssistantController(
             val initialDecision = router.route(userText)
             val isSms = initialDecision is RoutingDecision.Offline && initialDecision.intent.type == IntentType.SEND_SMS
             val segments = if (isSms) listOf(userText) else splitCompoundCommand(userText)
+
+            // A single question for the LLM streams straight through, so the
+            // first words are spoken while the rest is still being generated.
+            // (Compound commands are still collected and combined below.)
+            if (segments.size == 1 && router.route(segments[0]) is RoutingDecision.Online) {
+                var replied = false
+                handleOnlineStream(segments[0]).collect { event ->
+                    if (event is AssistantEvent.Text && event.content.isNotBlank()) replied = true
+                    emit(event)
+                }
+                if (!replied) emit(AssistantEvent.Text(Persona.notUnderstood(), ReplyMode.SPEAK))
+                return@flow
+            }
 
             val turnResults = mutableListOf<Triple<String, ReplyMode, Boolean>>()
 
@@ -337,6 +353,13 @@ class AssistantController(
         return reply to mode
     }
 
+    /**
+     * The LLM path. The model may call tools over several rounds — read the
+     * tasks, then set an alarm for the first one — so this loops until a round
+     * answers in plain text. Each round is streamed: text reaches the speaker
+     * as it arrives, and tool calls are reassembled from the stream rather
+     * than re-requested without streaming.
+     */
     private suspend fun handleOnlineStream(userText: String): Flow<AssistantEvent> = flow {
         // Read context BEFORE storing this turn's user message — otherwise the
         // window already contains it and the LLM sees the question twice.
@@ -350,51 +373,63 @@ class AssistantController(
             add(LlmMessage(role = "user", content = userText))
         }.toMutableList()
 
-        var fullReply = ""
-        var hasToolCall = false
-        askStream(messages).collect { chunk ->
-            val choice = chunk.choices.firstOrNull() ?: return@collect
-            if (choice.delta.toolCalls != null) hasToolCall = true
-            choice.delta.content?.let { fullReply += it; emit(AssistantEvent.Text(it, ReplyMode.SPEAK)) }
-        }
-
-        if (fullReply.isNotBlank() && !hasToolCall) {
-            lastSpokenReply = fullReply
-            persist(Message(role = "assistant", content = fullReply))
-            return@flow
-        }
-
-        val response = ask(messages)
-        if (response.toolCalls.isNullOrEmpty()) {
-            val text = response.content?.trim() ?: ""
-            if (fullReply.isBlank() && text.isNotBlank()) { emit(AssistantEvent.Text(text, ReplyMode.SPEAK)); fullReply = text }
-            if (fullReply.isNotBlank()) { lastSpokenReply = fullReply; persist(Message(role = "assistant", content = fullReply)) }
-        } else {
-            val calls = response.toolCalls
-            val assistantMsg = Message(role = "assistant", content = response.content, toolCallsJson = gson.toJson(calls))
-            persist(assistantMsg)
-            messages.add(response)
-            val toolResults = mutableListOf<Message>()
-            for (call in calls) {
-                val result = toolManager.execute(call.function.name, call.function.arguments, userText)
-                val toolMsg = LlmMessage(role = "tool", toolCallId = call.id, name = call.function.name, content = result.text)
-                messages.add(toolMsg)
-                toolResults.add(Message(role = "tool", content = result.text, toolCallId = call.id, name = call.function.name))
+        var spoken = ""
+        for (round in 0..MAX_TOOL_ROUNDS) {
+            // The last round offers no tools, so the model has to answer.
+            val offerTools = round < MAX_TOOL_ROUNDS
+            val calls = ToolCallAccumulator()
+            var text = ""
+            askStream(messages, offerTools).collect { chunk ->
+                val delta = chunk.choices?.firstOrNull()?.delta ?: return@collect
+                calls.add(delta.toolCalls)
+                delta.content?.takeIf { it.isNotEmpty() }?.let {
+                    text += it
+                    emit(AssistantEvent.Text(it, ReplyMode.SPEAK))
+                }
             }
-            persist(toolResults)
-            var finalReply = ""
-            askStream(messages).collect { chunk -> chunk.choices.firstOrNull()?.delta?.content?.let { finalReply += it; emit(AssistantEvent.Text(it, ReplyMode.SPEAK)) } }
-            if (finalReply.isNotBlank()) { lastSpokenReply = finalReply; persist(Message(role = "assistant", content = finalReply)) }
+            spoken += text
+
+            val toolCalls = if (offerTools) calls.build() else emptyList()
+            if (toolCalls.isEmpty()) {
+                if (text.isNotBlank()) persist(Message(role = "assistant", content = text))
+                break
+            }
+
+            val assistantMsg = LlmMessage(role = "assistant", content = text.ifBlank { null }, toolCalls = toolCalls)
+            messages.add(assistantMsg)
+            // Calls within one round are independent by construction (the model
+            // waits for results before making dependent calls), so run them together.
+            val results = coroutineScope {
+                toolCalls.map { call ->
+                    async { call to toolManager.execute(call.function.name, call.function.arguments, userText) }
+                }.awaitAll()
+            }
+            val roundMessages = mutableListOf(
+                Message(role = "assistant", content = assistantMsg.content, toolCallsJson = gson.toJson(toolCalls))
+            )
+            for ((call, result) in results) {
+                messages.add(LlmMessage(role = "tool", toolCallId = call.id, name = call.function.name, content = result.text))
+                roundMessages.add(Message(role = "tool", content = result.text, toolCallId = call.id, name = call.function.name))
+            }
+            // One write per round: a call is never stored without its results.
+            persist(roundMessages)
         }
+        if (spoken.isNotBlank()) lastSpokenReply = spoken
     }
 
-    private suspend fun askStream(messages: List<LlmMessage>): Flow<LlmStreamResponse> = flow {
-        val responseBody = api.chatCompletionStream(authHeader = llmAuthHeader(), request = LlmRequest(model = Constants.MIMO_MODEL, messages = messages, tools = toolManager.definitions, stream = true))
+    private suspend fun askStream(messages: List<LlmMessage>, offerTools: Boolean): Flow<LlmStreamResponse> = flow {
+        val request = LlmRequest(
+            model = Constants.MIMO_MODEL,
+            messages = messages,
+            tools = if (offerTools) toolManager.definitions else null,
+            stream = true
+        )
+        val responseBody = api.chatCompletionStream(authHeader = llmAuthHeader(), request = request)
         responseBody.byteStream().bufferedReader().use { reader ->
             while (true) {
                 val line = reader.readLine() ?: break
-                if (line.startsWith("data: ")) {
-                    val data = line.substring(6).trim()
+                if (line.startsWith("data:")) {
+                    val data = line.removePrefix("data:").trim()
                     if (data == "[DONE]") break
                     // Parse inside the try, emit outside it: emit() rethrows downstream
                     // failures and cancellation, which must not be swallowed here.
@@ -410,11 +445,6 @@ class AssistantController(
             "MiMo API key is not set. Add MIMO_API_KEY to local.properties and rebuild."
         }
         return "Bearer ${Constants.MIMO_API_KEY}"
-    }
-
-    private suspend fun ask(messages: List<LlmMessage>): LlmMessage {
-        val response = api.chatCompletion(authHeader = llmAuthHeader(), request = LlmRequest(model = Constants.MIMO_MODEL, messages = messages, tools = toolManager.definitions))
-        return response.choices?.firstOrNull()?.message ?: error("Empty response")
     }
 
     private suspend fun persist(vararg messages: Message) = persist(messages.toList())
