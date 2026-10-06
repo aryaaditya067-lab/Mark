@@ -31,6 +31,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val amplitude: StateFlow<Float> = _amplitude.asStateFlow()
 
     init {
+        assistant.warmUp() // connect to the LLM while the user is typing
+
         // Push a snapshot so the watch has something to read.
         viewModelScope.launch {
             runCatching {

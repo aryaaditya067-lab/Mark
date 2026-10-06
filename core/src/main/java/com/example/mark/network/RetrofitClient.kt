@@ -28,6 +28,16 @@ object RetrofitClient {
             .build()
     }
 
+    /**
+     * Opens the connection to the LLM (DNS, TCP and TLS) before the first
+     * question, so the question itself does not pay for it. Any answer will
+     * do, even an error status: OkHttp keeps the connection for the next call.
+     */
+    fun warmUpLlm() {
+        val request = okhttp3.Request.Builder().url(Constants.MIMO_BASE_URL + "models").head().build()
+        okHttp.newCall(request).execute().close()
+    }
+
     val llmApi: LlmApiService by lazy {
         Retrofit.Builder()
             .baseUrl(Constants.MIMO_BASE_URL)

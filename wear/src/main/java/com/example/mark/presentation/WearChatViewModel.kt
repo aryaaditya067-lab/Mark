@@ -336,6 +336,9 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
 
         _uiState.update { it.copy(isPreparing = true, isListening = false) }
         tStart = System.currentTimeMillis()
+        // Connect to the LLM while the user is still talking; over the watch's
+        // Bluetooth link the handshake alone takes a noticeable while.
+        assistant.warmUp()
         tts.stop()
 
         viewModelScope.launch {

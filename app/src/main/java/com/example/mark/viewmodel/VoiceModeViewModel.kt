@@ -97,6 +97,7 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun listen() {
         if (!_state.value.active) return
+        assistant.warmUp() // connect to the LLM while the user is still talking
 
         _state.update {
             it.copy(phase = VoicePhase.LISTENING, transcript = "", errorMessage = null)

@@ -17,6 +17,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody
 import okhttp3.ResponseBody.Companion.asResponseBody
@@ -151,6 +152,28 @@ class AssistantControllerLlmTest {
         }
         val api = FakeLlm(text("Hi."))
         assertEquals(listOf("Hi."), controller(api, memory = memory).ask(question).texts())
+    }
+
+    @Test
+    fun slowMemoryKeepsLoadingAndIsUsedNextTurn() {
+        // Like MemoryRepository: one load at a time, cached once it succeeds,
+        // and every load slower than a turn is willing to wait.
+        val memory = object : MemoryStore {
+            val lock = kotlinx.coroutines.sync.Mutex()
+            var cache: List<MemoryFact>? = null
+            override suspend fun all(): List<MemoryFact> = lock.withLock {
+                cache ?: run { delay(2_000); listOf(MemoryFact(text = "His car keys are in the drawer")) }.also { cache = it }
+            }
+            override suspend fun add(fact: MemoryFact) {}
+            override suspend fun remove(ids: Set<String>) {}
+        }
+        val api = FakeLlm(text("Hi."), text("In the drawer, sir."))
+        val mark = controller(api, memory = memory)
+        mark.ask(question)
+        assertTrue(!api.requests[0].messages.first().content!!.contains("car keys"))
+        // Cancelling the timed-out load meant every turn started (and lost) it again.
+        mark.ask("where did I leave my car keys yesterday evening")
+        assertTrue(api.requests[1].messages.first().content!!.contains("His car keys are in the drawer"))
     }
 
     @Test
