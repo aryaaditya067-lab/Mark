@@ -97,6 +97,7 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun listen() {
         if (!_state.value.active) return
+        assistant.warmUp() // connect to the LLM while the user is still talking
 
         _state.update {
             it.copy(phase = VoicePhase.LISTENING, transcript = "", errorMessage = null)
@@ -141,8 +142,8 @@ class VoiceModeViewModel(application: Application) : AndroidViewModel(applicatio
                         tts.speakStream(event.content)
                     }
                     is AssistantEvent.EndSession -> endAfterSpeaking = true
-                    // Spoken only (trailing space completes the sentence for TTS); not part of the reply.
-                    is AssistantEvent.Filler -> { streamed = true; tts.speakStream(event.content + " ") }
+                    // Spoken only; not part of the reply.
+                    is AssistantEvent.Filler -> { streamed = true; tts.speakFiller(event.content) }
                     is AssistantEvent.Error -> {
                         // Cut any filler or partial answer; the error is shown instead.
                         if (streamed) { tts.stop(); streamed = false }

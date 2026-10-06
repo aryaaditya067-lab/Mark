@@ -34,7 +34,9 @@ class AssistantController(
     private val transport: CommandTransport? = null,
     private val memory: MemoryStore? = null,
     private val situation: SituationProvider? = null,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    /** Opens the connection to the LLM ahead of a question; blocking, run off the main thread. */
+    private val warmUpConnection: () -> Unit = RetrofitClient::warmUpLlm
 ) {
 
     private val gson = Gson()
@@ -113,6 +115,8 @@ class AssistantController(
         private val MARKDOWN_SYMBOLS = Regex("[*#`]")
 
         private const val MEMORY_TIMEOUT_MS = 1500L
+        private const val HISTORY_TIMEOUT_MS = 2000L
+        private const val WARM_UP_INTERVAL_MS = 30_000L
 
         /** History kept in memory on the phone; the LLM window is taken from its tail. */
         private const val HISTORY_CACHE_SIZE = 4 * Constants.MAX_HISTORY_MESSAGES
@@ -142,6 +146,26 @@ class AssistantController(
     fun stop() {
         currentTurn?.cancel()
         currentTurn = null
+    }
+
+    @Volatile private var lastWarmUp = 0L
+
+    /**
+     * Call when the user is about to ask (the mic opens, the chat opens): the
+     * connection to the LLM (DNS, TCP, TLS; slow over the watch's Bluetooth
+     * link) and the turn's context are ready before the question is finished.
+     */
+    fun warmUp() {
+        if (Constants.MIMO_API_KEY.isBlank()) return
+        val now = System.currentTimeMillis()
+        if (now - lastWarmUp < WARM_UP_INTERVAL_MS) return
+        lastWarmUp = now
+        scope.launch { runCatching { warmUpConnection() } }
+        scope.launch {
+            if (!isWatch) runCatching { pastMessages() }
+            memory?.let { runCatching { it.all() } }
+            situation?.let { runCatching { it.snapshot() } }
+        }
     }
 
     /**
@@ -470,13 +494,19 @@ class AssistantController(
     private suspend fun handleOnlineStream(userText: String): Flow<AssistantEvent> = flow {
         // Read context BEFORE storing this turn's user message — otherwise the
         // window already contains it and the LLM sees the question twice.
-        val past = pastMessages()
+        // All three load at once, and each is time-boxed: context improves a
+        // reply but must never hold it up. The loads run in [scope], so one that
+        // times out still finishes and is cached for the next turn (it used to be
+        // cancelled, and a slow Firestore cost every turn the full wait again).
+        val started = System.currentTimeMillis()
+        val pastLoad = scope.async { pastMessages() }
+        val memoryLoad = memory?.let { store -> scope.async { runCatching { store.all() }.getOrNull() } }
+        val situationLoad = situation?.let { s -> scope.async { runCatching { s.snapshot() }.getOrNull() } }
+        val past = withTimeoutOrNull(HISTORY_TIMEOUT_MS) { pastLoad.await() }.orEmpty()
         val stored = HistoryWindow.select(past, Constants.MAX_HISTORY_MESSAGES)
-        // Memory is a nice-to-have for a turn, never a reason to stall it.
-        val facts = memory?.let { store ->
-            withTimeoutOrNull(MEMORY_TIMEOUT_MS) { runCatching { store.all() }.getOrNull() }
-        }?.let(MemoryFacts::forPrompt).orEmpty()
-        val now = situation?.let { runCatching { it.snapshot() }.getOrNull() }.orEmpty()
+        val facts = memoryLoad?.let { withTimeoutOrNull(MEMORY_TIMEOUT_MS) { it.await() } }?.let(MemoryFacts::forPrompt).orEmpty()
+        val now = situationLoad?.await().orEmpty()
+        android.util.Log.d("MarkLatency", "context ready in ${System.currentTimeMillis() - started}ms")
         persist(Message(role = "user", content = userText))
         val messages = buildList {
             add(LlmMessage(role = "system", content = PromptBuilder.systemPrompt(isWatch, facts, now)))
@@ -490,7 +520,13 @@ class AssistantController(
             val offerTools = round < MAX_TOOL_ROUNDS
             val calls = ToolCallAccumulator()
             var text = ""
+            val asked = System.currentTimeMillis()
+            var firstChunk = true
             askStream(messages, offerTools).collect { chunk ->
+                if (firstChunk) {
+                    firstChunk = false
+                    android.util.Log.d("MarkLatency", "round $round: first chunk after ${System.currentTimeMillis() - asked}ms")
+                }
                 val delta = chunk.choices?.firstOrNull()?.delta ?: return@collect
                 calls.add(delta.toolCalls)
                 // Markdown symbols are read aloud literally by TTS ("asterisk").

@@ -31,6 +31,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val amplitude: StateFlow<Float> = _amplitude.asStateFlow()
 
     init {
+        assistant.warmUp() // connect to the LLM while the user is typing
+
         // Push a snapshot so the watch has something to read.
         viewModelScope.launch {
             runCatching {
@@ -147,8 +149,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         if (speak) { streamed = true; tts.speakStream(event.content) }
                     }
                     is AssistantEvent.EndSession -> { /* typed chat has no session to end */ }
-                    // Spoken only (trailing space completes the sentence for TTS); never shown as the reply.
-                    is AssistantEvent.Filler -> if (speak) { streamed = true; tts.speakStream(event.content + " ") }
+                    // Spoken only; never shown as the reply.
+                    is AssistantEvent.Filler -> if (speak) { streamed = true; tts.speakFiller(event.content) }
                     is AssistantEvent.Error -> {
                         if (streamed) { tts.stop(); streamed = false }
                         val msg = event.throwable.message ?: "Something went wrong."

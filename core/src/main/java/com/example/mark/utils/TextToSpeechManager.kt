@@ -40,12 +40,24 @@ class TextToSpeechManager(context: Context) {
      */
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
 
+    private val progress = SpokenProgress()
+    private val _spoken = MutableStateFlow("")
+
+    /**
+     * The words of the current reply heard so far, moving with the voice
+     * (word by word where the engine reports it, else sentence by sentence).
+     * Empty again when a new reply starts or speech is stopped.
+     */
+    val spoken: StateFlow<String> = _spoken.asStateFlow()
+
     private val inFlight = mutableSetOf<String>()
     @Volatile private var streamOpen = false
     private var utteranceCounter = 0
 
     private var buffer = ""
     private var spokeThisStream = false
+    /** False when the text held before the engine was ready includes a filler. */
+    private var earlyShown = true
 
     private companion object {
         const val FIRST_SENTENCE_LENGTH = 12
@@ -135,11 +147,19 @@ class TextToSpeechManager(context: Context) {
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
                         _isSpeaking.value = true
+                        progress.started(utteranceId)?.let { _spoken.value = it }
                     }
-                    override fun onDone(utteranceId: String?) = finished(utteranceId)
+                    override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+                        progress.range(utteranceId, end)?.let { _spoken.value = it }
+                    }
+                    override fun onDone(utteranceId: String?) {
+                        progress.finished(utteranceId, completed = true)?.let { _spoken.value = it }
+                        finished(utteranceId)
+                    }
                     @Deprecated("deprecated")
-                    override fun onError(utteranceId: String?) = finished(utteranceId)
-                    override fun onStop(utteranceId: String?, interrupted: Boolean) = finished(utteranceId)
+                    override fun onError(utteranceId: String?) = stopped(utteranceId)
+                    override fun onError(utteranceId: String?, errorCode: Int) = stopped(utteranceId)
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) = stopped(utteranceId)
                 })
 
                 pending?.let { speak(it) }
@@ -147,7 +167,8 @@ class TextToSpeechManager(context: Context) {
                 // Streamed text that arrived before the engine was ready.
                 val early = buffer.trim()
                 buffer = ""
-                if (early.isNotBlank()) enqueue(early, TextToSpeech.QUEUE_ADD)
+                if (early.isNotBlank()) enqueue(early, TextToSpeech.QUEUE_ADD, shown = earlyShown)
+                earlyShown = true
                 settle()
             }
         }
@@ -212,6 +233,7 @@ class TextToSpeechManager(context: Context) {
             streamOpen = false
             buffer = ""
         }
+        _spoken.value = progress.reset()
         enqueue(text, TextToSpeech.QUEUE_FLUSH)
     }
 
@@ -225,16 +247,13 @@ class TextToSpeechManager(context: Context) {
             // Held until the engine is ready (see init). It used to be dropped,
             // which lost the first reply after a cold start and left voice mode
             // stuck on "Thinking".
+            if (!streamOpen) { _spoken.value = progress.reset(); earlyShown = true }
             buffer += chunk
             streamOpen = true
             _isSpeaking.value = true
             return
         }
-        if (!streamOpen) {
-            streamOpen = true
-            spokeThisStream = false
-            _isSpeaking.value = true
-        }
+        openStream()
         buffer += chunk
 
         // The first sentence goes out as soon as it is complete, so the reply
@@ -248,6 +267,30 @@ class TextToSpeechManager(context: Context) {
                 spokeThisStream = true
                 enqueue(toSpeak, TextToSpeech.QUEUE_ADD)
             }
+        }
+    }
+
+    /**
+     * Speaks a filler ("One moment, sir.") inside the reply stream. It is its
+     * own utterance and is left out of [spoken]: it is not part of the reply.
+     */
+    fun speakFiller(text: String) {
+        if (initFailed || text.isBlank()) return
+        if (!ready) { speakStream(text.trim() + " "); earlyShown = false; return }
+        openStream()
+        // Whatever reply text is waiting goes first, so the order stays as sent.
+        val waiting = buffer.trim()
+        buffer = ""
+        if (waiting.isNotBlank()) { spokeThisStream = true; enqueue(waiting, TextToSpeech.QUEUE_ADD) }
+        enqueue(text.trim(), TextToSpeech.QUEUE_ADD, shown = false)
+    }
+
+    private fun openStream() {
+        if (!streamOpen) {
+            streamOpen = true
+            spokeThisStream = false
+            _spoken.value = progress.reset()
+            _isSpeaking.value = true
         }
     }
 
@@ -276,11 +319,12 @@ class TextToSpeechManager(context: Context) {
             buffer = ""
         }
         tts?.stop()
+        _spoken.value = progress.reset()
         _isSpeaking.value = false
         releaseFocus()
     }
 
-    private fun enqueue(text: String, mode: Int) {
+    private fun enqueue(text: String, mode: Int, shown: Boolean = true) {
         ensureAudible()
         ensureUsableVoice()
         if (!holdingFocus) {
@@ -292,9 +336,15 @@ class TextToSpeechManager(context: Context) {
         }
         val id = "mark_tts_${utteranceCounter++}"
         synchronized(inFlight) { inFlight.add(id) }
+        progress.queued(id, text, shown)
         _isSpeaking.value = true
         val result = tts?.speak(text, mode, params, id)
-        if (result != TextToSpeech.SUCCESS) finished(id)
+        if (result != TextToSpeech.SUCCESS) stopped(id)
+    }
+
+    private fun stopped(utteranceId: String?) {
+        progress.finished(utteranceId, completed = false)
+        finished(utteranceId)
     }
 
     private fun finished(utteranceId: String?) {
