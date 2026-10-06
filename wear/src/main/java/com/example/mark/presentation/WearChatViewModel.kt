@@ -53,7 +53,12 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
     private var sendJob: Job? = null
-    private var streamJob: Job? = null
+    /**
+     * While a spoken reply plays, the screen shows what has been heard so far
+     * ([TextToSpeechManager.spoken]), so text and voice move together. Holds
+     * the complete reply, shown in full once speech ends.
+     */
+    private var followingSpeech: String? = null
     private var consecutiveSilences = 0
     /** Non-silence recognizer errors in a row ("Network error."), so they cannot loop forever. */
     private var consecutiveErrors = 0
@@ -69,19 +74,23 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
     // unless unregistered in onCleared(). Declared above init, which assigns it.
     private var batteryReceiver: android.content.BroadcastReceiver? = null
 
-    private companion object {
-        // Word reveal cadence for the on-screen reply. 380ms per word made the
-        // text crawl and fall far behind the speech; ~90ms reads as continuous
-        // while still feeling like it is being typed out.
-        const val WORD_REVEAL_MS = 90L
-    }
-
     init {
+        viewModelScope.launch {
+            tts.spoken.collect { heard ->
+                if (followingSpeech != null && heard.isNotBlank()) _liveReply.value = heard.trim().replace(Regex("\\s+"), " ")
+            }
+        }
+
         // Observe the TTS speaking state and update UI
         viewModelScope.launch {
             tts.isSpeaking.collect { speaking ->
                 val wasSpeaking = _uiState.value.isSpeaking
                 _uiState.update { it.copy(isSpeaking = speaking) }
+                if (!speaking) followingSpeech?.let { full ->
+                    // Whatever the engine reported, the whole reply ends up on screen.
+                    followingSpeech = null
+                    _liveReply.value = full
+                }
 
                 // Automate flow: restart listening after speaking finishes
                 if (wasSpeaking && !speaking && !starting) {
@@ -382,6 +391,7 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
         _messages.update { it + Message(role = "user", content = text) }
         _uiState.update { it.copy(isLoading = true, errorMessage = null) }
         _liveReply.value = ""
+        followingSpeech = null
 
         sendJob?.cancel()
         sendJob = viewModelScope.launch {
@@ -393,26 +403,26 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
                         currentMode = event.mode
                         fullReply += event.content
                         _uiState.update { it.copy(isLoading = false, streamingReply = fullReply) }
-                        if (currentMode == ReplyMode.SPEAK) { tts.speakStream(event.content); startReplyStreaming(fullReply) }
+                        if (currentMode == ReplyMode.SPEAK) {
+                            tts.speakStream(event.content)
+                            followingSpeech = fullReply.trim()
+                        }
                     }
                     is com.example.mark.assistant.AssistantEvent.EndSession -> endAfterSpeaking = true
-                    // Spoken only (trailing space completes the sentence for TTS); not part of the reply.
-                    is com.example.mark.assistant.AssistantEvent.Filler -> tts.speakStream(event.content + " ")
+                    // Spoken only; not part of the reply.
+                    is com.example.mark.assistant.AssistantEvent.Filler -> tts.speakFiller(event.content)
                     is com.example.mark.assistant.AssistantEvent.Error -> {
+                        followingSpeech = null
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
                         // Never read raw exception text aloud.
                         tts.speak(spokenError(event.throwable))
                     }
                     is com.example.mark.assistant.AssistantEvent.Done -> {
                         _uiState.update { it.copy(isLoading = false, streamingReply = null) }
-                        // Show the complete reply immediately on finish. Waiting for
-                        // the word-by-word reveal to catch up meant long answers were
-                        // cut off the moment the turn ended.
+                        // A spoken reply keeps following the voice; the rest are shown whole.
                         if (fullReply.isNotBlank()) {
-                            streamJob?.cancel()
-                            _liveReply.value = fullReply.trim()
-                        }
-                        if (fullReply.isNotBlank()) {
+                            if (currentMode == ReplyMode.SPEAK) followingSpeech = fullReply.trim()
+                            else _liveReply.value = fullReply.trim()
                             _messages.update { it + Message(role = "assistant", content = fullReply) }
                             if (currentMode == ReplyMode.SPEAK) tts.finalizeStream()
                             else if (endAfterSpeaking) { fireDoubleHaptic(); endSession("END_SESSION") }
@@ -445,35 +455,6 @@ class WearChatViewModel(application: Application) : AndroidViewModel(application
             vibrator?.vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
             delay(120)
             vibrator?.vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
-        }
-    }
-
-    /**
-     * Reveals the reply word by word. Only ever reveals words not shown yet, so a
-     * new chunk arriving mid-reveal continues from where the text is rather than
-     * restarting the cadence.
-     */
-    private fun startReplyStreaming(fullText: String) {
-        streamJob?.cancel()
-        streamJob = viewModelScope.launch {
-            val words = fullText.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-            val shown = _liveReply.value.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
-
-            // A long reply revealed at a fixed cadence finishes well after the
-            // speech does, and the tail was being dropped when the turn ended.
-            // Speed scales with length so text and voice land together.
-            val perWord = when {
-                words.size > 24 -> 35L
-                words.size > 12 -> 55L
-                else -> WORD_REVEAL_MS
-            }
-
-            for (i in shown until words.size) {
-                _liveReply.value = words.take(i + 1).joinToString(" ")
-                delay(perWord)
-            }
-            // Whatever happens with timing, the full text ends up on screen.
-            _liveReply.value = fullText.trim()
         }
     }
 

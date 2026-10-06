@@ -147,8 +147,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         if (speak) { streamed = true; tts.speakStream(event.content) }
                     }
                     is AssistantEvent.EndSession -> { /* typed chat has no session to end */ }
-                    // Spoken only (trailing space completes the sentence for TTS); never shown as the reply.
-                    is AssistantEvent.Filler -> if (speak) { streamed = true; tts.speakStream(event.content + " ") }
+                    // Spoken only; never shown as the reply.
+                    is AssistantEvent.Filler -> if (speak) { streamed = true; tts.speakFiller(event.content) }
                     is AssistantEvent.Error -> {
                         if (streamed) { tts.stop(); streamed = false }
                         val msg = event.throwable.message ?: "Something went wrong."
